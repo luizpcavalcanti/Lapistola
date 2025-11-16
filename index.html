@@ -1,329 +1,151 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Dust & Brass — Gunslinger Roguelike (One File)</title>
-<style>
-  html,body{height:100%;margin:0;background:#0b0b0d;color:#e6e6e6;font-family:Inter,Segoe UI,system-ui,Helvetica,Arial}
-  #wrap{height:100%;display:flex;align-items:center;justify-content:center}
-  canvas{background:#081017;border-radius:8px;display:block}
-  #hud{position:absolute;left:14px;top:14px;font-size:13px}
-  #panel{position:absolute;right:14px;top:14px;background:rgba(255,255,255,0.03);padding:8px;border-radius:8px;max-width:300px}
-  #menu,#gameover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:linear-gradient(180deg,rgba(2,6,23,0.6),rgba(0,0,0,0.8))}
-  button{padding:10px 14px;margin:6px;font-size:14px;border-radius:6px;background:#1f2937;color:#fff;border:0;cursor:pointer}
-  .mut-list{max-height:200px;overflow:auto;font-size:13px}
-  .small{font-size:12px;color:#bfc7d6}
-</style>
+  <meta charset="UTF-8" />
+  <title>Turn-Based Gunslinger Prototype</title>
+  <style>
+    body { background:#111; color:#eee; font-family:monospace; }
+    canvas { background:#222; display:block; margin:0 auto; }
+    #log { width:600px; margin:10px auto; background:#000; padding:10px; height:120px; overflow-y:auto; }
+  </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="c" width="980" height="720"></canvas>
-  <div id="hud"></div>
-  <div id="panel" style="display:none">
-    <div style="font-weight:700">Run Details (TAB)</div>
-    <div id="upgrades" class="small" style="margin-top:6px"></div>
-    <div id="mutations" class="small mut-list" style="margin-top:6px"></div>
-  </div>
-  <div id="menu">
-    <h1>Dust & Brass</h1>
-    <div class="small">Premise: Lone gunslinger, procedurally stacked arenas, strange gunmutations and gritty upgrades.</div>
-    <div class="small">WASD move • Mouse aim • Left click shoot • Right click dodge-roll • TAB show details</div>
-    <button id="start">Start Run</button>
-    <div class="small">Each arena increases enemy variety. Boss rooms reward Mutations (unique mechanics) or numeric Upgrades.</div>
-  </div>
-  <div id="gameover" style="display:none">
-    <h2>YOU FELL</h2>
-    <div id="goStats" class="small" style="margin-bottom:8px"></div>
-    <button id="restart">Restart</button>
-  </div>
-</div>
-
+<canvas id="game" width="600" height="600"></canvas>
+<div id="log"></div>
 <script>
-/*
-  Dust & Brass — single-file gunslinger roguelike
-  - Cumulative enemy unlocks per arena
-  - Mutations = quirky gameplay modifiers (stack by level)
-  - Upgrades = numeric, stackable (move speed, dmg, clip, reload)
-  - Dodge-roll (invulnerable brief) consumes stamina
-  - Ammo and reload pickups
-  - Boss rooms every few arenas
-*/
+/* -----------------------------------------------------------
+   TURN-BASED GUNSLINGER PROTOTYPE (very small & readable)
+   ----------------------------------------------------------- */
+const ctx = document.getElementById("game").getContext("2d");
+const log  = document.getElementById("log");
+function logMsg(t){ log.innerHTML += t+"<br>"; log.scrollTop=999999; }
 
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-const HUD = document.getElementById('hud');
-const panel = document.getElementById('panel');
-const upgradesEl = document.getElementById('upgrades');
-const mutationsEl = document.getElementById('mutations');
-const menu = document.getElementById('menu');
-const gameover = document.getElementById('gameover');
-const goStats = document.getElementById('goStats');
-const btnStart = document.getElementById('start');
-const btnRestart = document.getElementById('restart');
-
-const W = canvas.width, H = canvas.height;
-
-let state = 'menu'; // menu | running | gameover
-let player, enemies, bullets, pickups, floating;
-let enemyPool, arena, killsThisArena, toClear;
-let lastTs = 0, startTime = 0;
-let score = 0, stats;
-
-const MAX_ARENA = 12;
-
-/* ---------- Upgrade & Mutation pools ---------- */
-const Upgrades = { move:0, dmg:0, clip:0, reload:0, crit:0 };
-const Mutations = {}; // id -> {level, id, name, desc}
-
-const UPGRADE_POOL = [
-  {k:'move', name:'Move Speed'},
-  {k:'dmg', name:'Damage'},
-  {k:'clip', name:'Clip Size'},
-  {k:'reload', name:'Reload Speed'},
-  {k:'crit', name:'Critical Chance'}
-];
-
-const MUTATION_POOL = [
-  {id:'ricochet', name:'Ricochet Rounds', desc:'Bullets bounce once.'},
-  {id:'phase', name:'Phase Step', desc:'Dodge-roll leaves short phantom that distracts enemies.'},
-  {id:'overload', name:'Overload', desc:'Every 8th shot fires an empowered round.'},
-  {id:'shrapnel', name:'Shrapnel', desc:'On kill, enemies spawn shrapnel bullets.'},
-  {id:'hunter', name:'Hunter Rounds', desc:'Damaging low-HP enemies deals extra damage.'},
-  {id:'grease', name:'Grease Shot', desc:'Shots slow enemies briefly.'},
-  {id:'bleed', name:'Bleed', desc:'Enemies take damage over time on hit.'}
-];
-
-/* ---------- Enemy definitions ---------- */
-const ENEMY_TYPES = {
-  grunt: {col:'#8b0000', life:3, speed:60},
-  skitter:{col:'#ff6f61', life:2, speed:120},
-  armored:{col:'#4b5563', life:6, speed:36},
-  shooter:{col:'#6d28d9', life:4, speed:40, ranged:true},
-  splitter:{col:'#b5651d', life:3, speed:50, split:true},
-  elite:{col:'#f59e0b', life:5, speed:80},
-  boss:{col:'#0ea5a4', life:20, speed:40, boss:true}
+/* -----------------------------------------------------------
+   Basic State
+----------------------------------------------------------- */
+const State = {
+  turn: 0,
+  player: { x:300, y:500, hp:10, dmg:3 },
+  enemies: [],
+  enemyAttackPreview: [], // list of {x,y}
+  phase: "player", // "player" or "enemy"
 };
 
-/* ---------- Utilities ---------- */
-const rand=(a,b)=>Math.random()*(b-a)+a;
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const now=()=>performance.now();
-const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+/* -----------------------------------------------------------
+   Helpers
+----------------------------------------------------------- */
+function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function draw(){
+  ctx.clearRect(0,0,600,600);
 
-function addFloating(x,y,t,c='white',ttl=900){ floating.push({x,y,t,c,created:now(),ttl}); }
+  // Draw preview attack tiles
+  for(const p of State.enemyAttackPreview){
+    ctx.fillStyle = "#662222";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 20, 0, Math.PI*2);
+    ctx.fill();
+  }
 
-/* ---------- Entities ---------- */
-function createPlayer(){
-  player = {
-    x:W/2,y:H/2,w:22,h:22,hp:12, maxHp:12,
-    aim:0, vx:0, vy:0, speed:220,
-    pressing:{},
-    clip:6 + Upgrades.clip*2, ammo:null, reloadTimer:0, reloadTime:1200 - Upgrades.reload*100,
-    canShoot:true, fireRate:220 - Upgrades.crit*10, lastShot:0,
-    stamina:100, rolling:false, rollTimer:0, rollDur:220, invuln:false,
-    perks:[]
-  };
-  player.ammo = player.clip;
+  // Player
+  ctx.fillStyle = "#4af";
+  ctx.beginPath();
+  ctx.arc(State.player.x, State.player.y, 20, 0, Math.PI*2);
+  ctx.fill();
+
+  // Enemies
+  ctx.fillStyle = "#f44";
+  for(const e of State.enemies){
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, 20, 0, Math.PI*2);
+    ctx.fill();
+  }
 }
 
-function spawnEnemy(type){
-  const spec = ENEMY_TYPES[type];
-  const id = Math.random().toString(36).slice(2);
-  const edge = Math.random();
-  let x,y;
-  if (edge<.25){ x=rand(0,W); y=-40; }
-  else if (edge<.5){ x=rand(0,W); y=H+40; }
-  else if (edge<.75){ x=-40; y=rand(0,H); }
-  else { x=W+40; y=rand(0,H); }
-  enemies[id] = {id,type,x,y,w:24,h:24,life:spec.life + Math.floor(arena/3),spec:spec,ang:0};
+/* -----------------------------------------------------------
+   Enemy Spawn + Attack Preview
+----------------------------------------------------------- */
+function spawnWave(){
+  State.enemies.push(
+    { x:150, y:150, hp:3, dmg:2 },
+    { x:450, y:150, hp:3, dmg:2 }
+  );
+  logMsg("New enemies appear.");
+  computeEnemyPreview();
 }
 
-function spawnBullet(x,y,ang,speed,damage,owner,opts={}){
-  const id=Math.random().toString(36).slice(2);
-  bullets[id] = {id,x,y,ang,speed,dx:Math.cos(ang)*speed,dy:Math.sin(ang)*speed,damage,owner,ttl:3000,created:now(),opts};
+function computeEnemyPreview(){
+  State.enemyAttackPreview = State.enemies.map(e=>({ x:e.x, y:e.y+60 }));
 }
 
-function spawnPickup(type,x,y){ const id=Math.random().toString(36).slice(2); pickups[id]={id,type,x,y,w:14,h:14}; }
-
-/* ---------- Arena & progression ---------- */
-function initProgress(){ arena=1; enemyPool=['grunt']; killsThisArena=0; toClear = 8; }
-
-function advanceArena(){ if (arena>=MAX_ARENA) return; arena++; const unlocks={2:'skitter',3:'armored',4:'shooter',5:'splitter',6:'elite',8:'armored',10:'elite'}; const t=unlocks[arena]; if (t && !enemyPool.includes(t)) enemyPool.push(t); toClear = Math.round(8 + arena*2); giveArenaReward(); addFloating(W/2,H/2-30,'ARENA '+arena,'yellow',1400);
+/* -----------------------------------------------------------
+   Turns
+----------------------------------------------------------- */
+function playerAttack(){
+  const t = State.player;
+  // choose closest enemy
+  let closest=null, cd=999;
+  for(const e of State.enemies){
+    const d=dist(t,e); if(d<cd){ cd=d; closest=e; }
+  }
+  if(!closest){ logMsg("No enemies to shoot."); return; }
+  closest.hp -= t.dmg;
+  logMsg("You shoot an enemy for "+t.dmg+" dmg.");
+  State.enemies = State.enemies.filter(e=>e.hp>0);
 }
 
-function giveArenaReward(){ if (Math.random()<0.65) grantMutation(); else grantUpgrade(); }
-
-/* ---------- Mutations & Upgrades ---------- */
-function grantUpgrade(){ const pick=UPGRADE_POOL[Math.floor(Math.random()*UPGRADE_POOL.length)]; Upgrades[pick.k]=(Upgrades[pick.k]||0)+1; applyUpgrades(); addFloating(player.x,player.y-20,'UPGRADE: '+pick.name+' Lvl '+Upgrades[pick.k],'aqua',1200); }
-
-function grantMutation(){ const notHave = MUTATION_POOL.filter(m=>!Mutations[m.id]); const pick = (notHave.length?notHave[Math.floor(Math.random()*notHave.length)]:MUTATION_POOL[Math.floor(Math.random()*MUTATION_POOL.length)]); applyMutation(pick); }
-
-function applyMutation(m){ if (!Mutations[m.id]){ Mutations[m.id]={level:1,...m}; addFloating(player.x,player.y-18,'MUTATION: '+m.name,'cyan',1200);} else { Mutations[m.id].level++; addFloating(player.x,player.y-18,'MUTATION UP: '+m.name+' +'+(Mutations[m.id].level-1),'lightgreen',1000); } applyAllMutations(); }
-
-function applyAllMutations(){ // set flags on player/perks
-  player.perks = [];
-  player.ricochet = !!Mutations['ricochet'];
-  player.phase = !!Mutations['phase'];
-  player.overload = !!Mutations['overload'];
-  player.shrapnel = !!Mutations['shrapnel'];
-  player.hunter = !!Mutations['hunter'];
-  player.grease = !!Mutations['grease'];
-  player.bleed = !!Mutations['bleed'];
-}
-
-function applyUpgrades(){ if (!player) return; player.speed = 220 + (Upgrades.move*12); player.fireCooldown = Math.max(80, 220 - Upgrades.crit*12); player.clip = 6 + Upgrades.clip*2; player.reloadTime = Math.max(600, 1200 - Upgrades.reload*100); }
-
-/* ---------- Spawning & updates ---------- */
-let spawnAccum = 0;
-function spawnTick(dt){ spawnAccum += dt; const base = Math.max(0.4,1.6 - arena*0.06); while (spawnAccum>base){ spawnAccum -= base; const t = enemyPool[Math.floor(Math.random()*enemyPool.length)]; spawnEnemy(t); } if (Math.random()<0.006+arena*0.0009) spawnPickup('ammo'); if (Math.random()<0.004+arena*0.0007) spawnPickup('health'); }
-
-function updateEnemies(dt){ for (const id in enemies){ const e=enemies[id]; if (e.spec.boss){ // boss simple pattern
-      if (e.y < 140) e.y += 40*dt;
-      else { e.ang += dt*0.6; e.x = W/2 + Math.cos(e.ang)*140; e.y = 160 + Math.sin(e.ang)*18; if (!e._last || now()-e._last>1400){ e._last=now(); for (let a=0;a<360;a+=30) spawnBullet(e.x,e.y,a*Math.PI/180,260,2,'enemy'); } }
-    } else {
-      const ang = Math.atan2(player.y-e.y, player.x-e.x);
-      e.x += Math.cos(ang)*(e.spec.speed*(1+arena*0.03))*dt; e.y += Math.sin(ang)*(e.spec.speed*(1+arena*0.03))*dt;
-      if (e.spec.ranged){ e._shoot = (e._shoot||0)-dt; if (e._shoot<=0){ e._shoot = 1.8 + Math.random()*1.6; const angp=Math.atan2(player.y-e.y,player.x-e.x); spawnBullet(e.x,e.y,angp,260,2,'enemy'); } }
+function enemyTurn(){
+  logMsg("Enemies attack!");
+  for(const p of State.enemyAttackPreview){
+    if(dist(p, State.player) < 25){
+      State.player.hp -= 2;
+      logMsg("You are hit for 2 dmg!");
     }
   }
+  computeEnemyPreview();
 }
 
-function updateBullets(dt){ for (const id in bullets){ const b = bullets[id]; b.x += b.dx*dt; b.y += b.dy*dt; if (now()-b.created > b.ttl) { delete bullets[id]; continue; } // boundary
-    if (b.owner==='player'){
-      for (const eid in enemies){ const en=enemies[eid]; if (rectCol(b,en)){
-          // damage calc
-          let dmg = b.damage + (Upgrades.dmg*1);
-          if (Math.random() < (0.03*Upgrades.crit)) dmg *= 2;
-          // special mutations
-          if (player.hunter && en.life <= (1+Mutations['hunter']?.level||0)) dmg += 2;
-          en.life -= dmg;
-          addFloating(en.x,en.y-10,'-'+Math.round(dmg),'#ffd166',800);
-          // bleed
-          if (player.bleed){ en._bleed = (en._bleed||0) + (1*Mutations['bleed']?.level||0); }
-          // grease slow
-          if (player.grease){ en._slow = (en._slow||0) + 0.6; }
-          // ricochet
-          if (player.ricochet && !b._ric){ b._ric = 1; b.dx *= -1; b.dy *= -1; } else delete bullets[id];
-          // kill handling
-          if (en.life <= 0){ delete enemies[eid]; stats.kills++; killsThisArena++; score += 200; if (player.shrapnel){ const lvl = Mutations['shrapnel']?.level||1; for (let a=0;a<360;a+=60) spawnBullet(en.x,en.y,(a+rand(-8,8))*Math.PI/180,240,2+lvl,'player'); }
-            // spawn reward occasionally
-            if (Math.random() < 0.2) spawnPickup('reward', en.x, en.y);
-            if (killsThisArena >= toClear){ killsThisArena = 0; advanceArena(); if ([3,6,9,12].includes(arena)) spawnBoss(); }
-          }
-          break;
-      } }
-    } else { // enemy bullets hit player
-      if (rectCol(b, player) && !player.invuln){ player.hp -= b.damage; stats.damageTaken++; addFloating(player.x,player.y-14,'-'+b.damage,'red',900); delete bullets[id]; if (player.hp<=0) endRun(); }
-    }
-  } }
-
-function spawnBoss(){ const id='boss_'+Math.random().toString(36).slice(2); enemies[id]={id,type:'boss',x:W/2,y:-180,w:120,h:120,life: ENEMY_TYPES.boss.life + arena*3, spec:ENEMY_TYPES.boss, boss:true, ang:0}; addFloating(W/2,80,'BOSS ROOM','red',1600); }
-
-/* pickups */
-function pickupUpdate(){ for (const id in pickups){ const p=pickups[id]; if (rectCol(p,player)){
-      if (p.type==='ammo'){ player.ammo = Math.min(player.clip, player.ammo + (3 + Upgrades.clip)); addFloating(player.x,player.y-20,'AMMO','gold'); }
-      else if (p.type==='health'){ player.hp = Math.min(player.maxHp, player.hp + 3); addFloating(player.x,player.y-20,'HEAL','lightgreen'); }
-      else if (p.type==='reward'){ if (Math.random()<0.7) grantMutation(); else grantUpgrade(); }
-      delete pickups[id]; }
-  } }
-
-/* helpers */
-function rectCol(a,b){ return a.x - (a.w||a.width||0)/2 < b.x + (b.w||b.width||0)/2 && a.x + (a.w||a.width||0)/2 > b.x - (b.w||b.width||0)/2 && a.y - (a.h||a.height||0)/2 < b.y + (b.h||b.height||0)/2 && a.y + (a.h||a.height||0)/2 > b.y - (b.h||b.height||0)/2; }
-
-/* ---------- Draw ---------- */
-function drawAll(dt){ ctx.clearRect(0,0,W,H);
-  // background grid
-  ctx.fillStyle='#07101a'; ctx.fillRect(0,0,W,H);
-  ctx.strokeStyle='rgba(255,255,255,0.02)'; for (let x=0;x<W;x+=48){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  // pickups
-  for (const id in pickups){ const p=pickups[id]; ctx.fillStyle=(p.type==='ammo'?'gold':p.type==='health'?'lightgreen':'deepskyblue'); ctx.fillRect(p.x-10,p.y-10,20,20); }
-  // enemies
-  for (const id in enemies){ const e=enemies[id]; ctx.fillStyle=e.spec.col; ctx.fillRect(e.x - e.w/2, e.y - e.h/2, e.w, e.h); if (e.boss){ ctx.fillStyle='#fff'; ctx.font='14px sans-serif'; ctx.fillText('BOSS', e.x-22,e.y - e.h/2 - 6); } }
-  // bullets
-  for (const id in bullets){ const b=bullets[id]; ctx.fillStyle = (b.owner==='player'?'#fff':'#ff8a65'); ctx.fillRect(b.x-4,b.y-4,8,8); }
-  // player
-  ctx.save(); if (player.rolling) ctx.globalAlpha=0.6; ctx.fillStyle='#9ee493'; ctx.fillRect(player.x - player.w/2, player.y - player.h/2, player.w, player.h); ctx.restore();
-  // floating
-  const tnow = now(); for (let i=floating.length-1;i>=0;i--){ const f=floating[i]; const age = tnow - f.created; if (age>f.ttl){ floating.splice(i,1); continue;} ctx.globalAlpha = clamp(1 - age/f.ttl,0,1); ctx.fillStyle=f.c; ctx.font='14px sans-serif'; ctx.fillText(f.t,f.x,f.y - age/30); ctx.globalAlpha=1; }
-}
-
-function drawHUD(){ HUD.innerHTML = `Arena: ${arena}/${MAX_ARENA} • Score: ${score}<br>HP: ${player.hp} • Ammo: ${player.ammo}/${player.clip} • Kills: ${stats.kills} • Clear: ${killsThisArena}/${toClear}<div class="small">TAB to toggle details</div>`;
-  if (panel.style.display!=='none'){
-    let uph=''; UPGRADE_POOL.forEach(u=> uph += `${u.name}: Lvl ${Upgrades[u.k]||0}<br>`); upgradesEl.innerHTML = '<b>Upgrades</b><br>'+uph;
-    let muth = '<b>Mutations</b><br>'; for (const k in Mutations) muth += `${Mutations[k].name} (L${Mutations[k].level}) — ${Mutations[k].desc}<br>`; if (!Object.keys(Mutations).length) muth += 'None<br>'; mutationsEl.innerHTML = muth;
+function nextTurn(){
+  if(State.phase === "player"){
+    playerAttack();
+    State.phase = "enemy";
+  } else {
+    enemyTurn();
+    State.phase = "player";
   }
+  State.turn++;
+  draw();
+  checkEnd();
 }
 
-/* ---------- Game loop ---------- */
-function step(ts){ if (!lastTs) lastTs = ts; let dtMs = ts - lastTs; lastTs = ts; if (dtMs>100) dtMs=100; const dt = dtMs*0.001;
-  if (state==='running'){
-    spawnTick(dtMs);
-    updateEnemies(dt);
-    updateBullets(dt);
-    pickupUpdate();
-    // player movement
-    let sp = player.speed;
-    if (player.pressing.left) player.x -= sp*dt;
-    if (player.pressing.right) player.x += sp*dt;
-    if (player.pressing.up) player.y -= sp*dt;
-    if (player.pressing.down) player.y += sp*dt;
-    player.x = clamp(player.x, player.w/2, W-player.w/2); player.y = clamp(player.y, player.h/2, H-player.h/2);
-    // roll handling
-    if (player.rolling){ player.rollTimer -= dtMs; if (player.rollTimer<=0){ player.rolling=false; player.invuln=false; } }
-    // reload
-    if (player.reloadTimer>0){ player.reloadTimer -= dtMs; if (player.reloadTimer<=0){ player.ammo = player.clip; } }
-    // update bleed & slow on enemies
-    for (const id in enemies){ const e=enemies[id]; if (e._bleed && e._bleed>0){ e.life -= 0.01 * e._bleed * dtMs; e._bleed = Math.max(0, e._bleed - dtMs*0.002); } if (e._slow && e._slow>0){ e._slow = Math.max(0, e._slow - dtMs*0.002); } }
-    applyAllMutations();
-    stats.timeSurvived = now() - startTime;
+function checkEnd(){
+  if(State.player.hp <= 0){ logMsg("You died."); }
+  if(State.enemies.length === 0){ logMsg("Wave cleared!"); spawnWave(); }
+}
+
+/* -----------------------------------------------------------
+   Input: Player moves with click, attacks with SPACE
+----------------------------------------------------------- */
+canvas.addEventListener("click", e=>{
+  if(State.phase !== "player") return;
+  const r = canvas.getBoundingClientRect();
+  State.player.x = e.clientX - r.left;
+  State.player.y = e.clientY - r.top;
+  logMsg("You move.");
+  nextTurn();
+});
+
+document.addEventListener("keydown", e=>{
+  if(e.code === "Space" && State.phase === "player"){
+    logMsg("You attack.");
+    nextTurn();
   }
-  drawAll(dtMs);
-  drawHUD();
-  requestAnimationFrame(step);
-}
+});
 
-/* ---------- Input & combat ---------- */
-canvas.addEventListener('mousemove', e=>{ const r=canvas.getBoundingClientRect(); const mx=e.clientX-r.left, my=e.clientY-r.top; player.aim=Math.atan2(my-player.y,mx-player.x); });
-canvas.addEventListener('click', ()=>{ if (state!=='running') return; shoot(); });
-canvas.addEventListener('contextmenu', e=>{ e.preventDefault(); if (state!=='running') return; dodgeRoll(); });
-
-document.addEventListener('keydown', e=>{ if (!player) return; const k=e.key.toLowerCase(); if (k==='w') player.pressing.up=true; if (k==='s') player.pressing.down=true; if (k==='a') player.pressing.left=true; if (k==='d') player.pressing.right=true; if (e.key==='Tab'){ e.preventDefault(); togglePanel(); } });
-document.addEventListener('keyup', e=>{ if (!player) return; const k=e.key.toLowerCase(); if (k==='w') player.pressing.up=false; if (k==='s') player.pressing.down=false; if (k==='a') player.pressing.left=false; if (k==='d') player.pressing.right=false; });
-
-function shoot(){ if (!player.canShoot || player.reloadTimer>0) return; const nowt = now(); if (nowt - player.lastShot < Math.max(90, player.fireCooldown || 160)) return; if (player.ammo<=0){ player.reloadTimer = player.reloadTime; addFloating(player.x,player.y-18,'RELOADING','orange'); return; }
-  player.lastShot = nowt; player.ammo--; stats.shots++;
-  // overload mutation: every Nth shot
-  let empowered = false; if (player.overload){ const lvl = Mutations['overload'].level||1; if ((stats.shots % (8 - Math.min(5,lvl)))===0){ empowered=true; } }
-  const baseDmg = 3 + Upgrades.dmg;
-  const dmg = empowered? baseDmg*2 : baseDmg;
-  // spread if any
-  spawnBullet(player.x + Math.cos(player.aim)*18, player.y + Math.sin(player.aim)*18, player.aim, 640, dmg, 'player');
-  if (Mutations['ricochet'] && Math.random()<0.15) spawnBullet(player.x,player.y, player.aim + 0.12, 560, dmg*0.8,'player');
-}
-
-function dodgeRoll(){ if (player.rolling || player.stamina<20) return; player.rolling=true; player.invuln=true; player.rollTimer = player.rollDur; player.stamina -= 30; // roll in aim direction
-  const dx = Math.cos(player.aim), dy=Math.sin(player.aim); player.x += dx*48; player.y += dy*48; addFloating(player.x,player.y-14,'ROLL','white',600);
-  if (player.phase){ // leave phantom
-    spawnPickup('reward', player.x + Math.random()*40-20, player.y + Math.random()*40-20);
-  }
-}
-
-/* ---------- Run control ---------- */
-function startRun(){ state='running'; menu.style.display='none'; gameover.style.display='none'; enemies={}; bullets={}; pickups={}; floating=[]; // reset
-  for (const k in Upgrades) Upgrades[k]=0; for (const k in Mutations) delete Mutations[k]; initProgress(); applyUpgrades(); createPlayer(); score=0; stats={shots:0,kills:0,damageTaken:0,timeSurvived:0}; spawnAccum=0; // spawn some
-  for (let i=0;i<3;i++) spawnEnemy('grunt'); startTime = now(); lastTs = 0; requestAnimationFrame(step);
-}
-
-function endRun(){ state='gameover'; gameover.style.display='flex'; goStats.innerHTML = `Score: ${score}<br>Kills: ${stats.kills}<br>Time: ${Math.round(stats.timeSurvived/1000)}s<br>Arena reached: ${arena}<div class="small">Upgrades: ${Object.values(Upgrades).reduce((a,b)=>a+(b||0),0)} • Mutations: ${Object.keys(Mutations).length}</div>`; }
-
-btnStart.addEventListener('click', ()=>startRun()); btnRestart.addEventListener('click', ()=>{ startRun(); gameover.style.display='none'; });
-
-function togglePanel(){ panel.style.display = (panel.style.display==='none')?'block':'none'; }
-
-/* initial UI */
-menu.style.display='flex'; gameover.style.display='none'; panel.style.display='none'; floating=[]; createPlayer(); requestAnimationFrame(step);
-
+/* -----------------------------------------------------------
+   Start
+----------------------------------------------------------- */
+spawnWave();
+draw();
 </script>
 </body>
 </html>
