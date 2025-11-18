@@ -1,277 +1,736 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<title>Starfall Outpost</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Starfall Outpost — Extended</title>
 <style>
-    body {
-        background: #111;
-        margin: 0;
-        overflow: hidden;
-        font-family: monospace;
-        color: white;
-    }
-    #gameCanvas {
-        background: #1a1a1a;
-        display: block;
-        margin: 0 auto;
-    }
-    #ui {
-        position: absolute;
-        top: 10px;
-        left: 10px;
-        font-size: 18px;
-        color: white;
-        z-index: 10;
-    }
-    #upgradeMenu {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: rgba(0,0,0,0.8);
-        padding: 20px;
-        border: 2px solid white;
-        display: none;
-        z-index: 20;
-    }
-    .upgradeBtn {
-        display: block;
-        margin: 10px 0;
-        padding: 10px;
-        background: #333;
-        color: white;
-        border: 1px solid white;
-        cursor: pointer;
-    }
+  :root{--bg:#0f1113;--panel:rgba(0,0,0,0.6);--accent:#39f}
+  html,body{height:100%;margin:0;background:var(--bg);color:#ddd;font-family:Verdana,Arial,Helvetica,sans-serif}
+  #wrap{position:relative;height:100vh;display:flex;align-items:center;justify-content:center}
+  canvas{background:#111;display:block;border:0.5rem solid rgba(255,50,150,0.05);width:100%;max-width:1000px;height:auto}
+  #hud{position:absolute;left:12px;top:12px;color:#fff;font-size:14px;line-height:1.3;z-index:50;min-width:200px}
+  #controls{position:absolute;right:12px;top:12px;background:var(--panel);padding:8px;border-radius:6px;z-index:50}
+  #upgradeMenu{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.9);padding:18px;border-radius:8px;border:2px solid #444;display:none;z-index:60;min-width:320px}
+  .btn{display:inline-block;padding:8px 12px;margin:6px;background:#222;border:1px solid #555;color:#fff;cursor:pointer;border-radius:6px}
+  .small{font-size:12px;color:#bbb}
+  #mobileBtns{position:absolute;left:12px;bottom:12px;z-index:60;display:none}
+  .mbtn{width:56px;height:56px;border-radius:8px;margin:6px;background:rgba(255,255,255,0.06);display:inline-flex;align-items:center;justify-content:center;touch-action:none}
+  #specialBar{position:absolute;left:12px;bottom:12px;height:12px;width:220px;background:#222;border-radius:8px;overflow:hidden;border:1px solid #333;z-index:60}
+  #specialFill{height:100%;width:0%;background:linear-gradient(90deg,#ffdf5b,#ff6a6a)}
+  #minimap{position:absolute;right:12px;bottom:12px;width:140px;height:90px;background:rgba(0,0,0,0.4);border-radius:6px;padding:6px;z-index:60;color:#ccc;font-size:12px}
+  @media (max-width:640px){ #mobileBtns{display:block} canvas{height:70vh} }
 </style>
 </head>
 <body>
+<div id="wrap">
+  <canvas id="game" width="1000" height="700"></canvas>
 
-<div id="ui">Wave: <span id="waveNumber">1</span> | HP: <span id="hpText">100</span></div>
+  <div id="hud">
+    <div><strong>Outpost</strong> • Wave <span id="wave">1</span> • Boss in <span id="toBoss">3</span></div>
+    <div>HP: <span id="hp">100</span> • Score: <span id="score">0</span></div>
+    <div class="small">Arma: <span id="weaponName">Basic</span> • Damage: <span id="dmg">10</span></div>
+    <div id="pickups" class="small"></div>
+  </div>
 
-<canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div id="controls">
+    <button id="btnStart" class="btn">Iniciar</button>
+    <button id="btnPause" class="btn">Pausar</button>
+    <button id="btnRestart" class="btn">Reiniciar</button>
+  </div>
 
-<div id="upgradeMenu">
-    <h2>Choose an Upgrade</h2>
-    <div id="upgradeOptions"></div>
+  <div id="upgradeMenu">
+    <h3>Escolha um upgrade</h3>
+    <div id="options"></div>
+    <div class="small" style="margin-top:8px">Toque para selecionar e continuar</div>
+  </div>
+
+  <div id="specialBar"><div id="specialFill"></div></div>
+
+  <div id="minimap">
+    <div>Mini-map</div>
+    <canvas id="mini" width="120" height="60" style="display:block;background:rgba(0,0,0,0.15);margin-top:6px;border-radius:4px"></canvas>
+    <div class="small" style="margin-top:6px">Loot nearby shown as •</div>
+  </div>
+
+  <div id="mobileBtns">
+    <div style="display:flex;flex-wrap:wrap;width:200px;">
+      <div class="mbtn" id="mLeft">◀</div>
+      <div class="mbtn" id="mUp">▲</div>
+      <div class="mbtn" id="mDown">▼</div>
+      <div class="mbtn" id="mRight">▶</div>
+      <div class="mbtn" id="mFire" style="width:120px">FIRE</div>
+    </div>
+  </div>
 </div>
 
 <script>
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
+/*
+  Starfall Outpost - Extended single-file game
+  Features added:
+   - bosses every N rooms/waves
+   - stronger boss HP/behavior
+   - dash ability (space) with cooldown
+   - special power (charged) with bar
+   - mobile touch controls
+   - loot drops / weapons / roguelite upgrades between waves
+   - mini-map (simple)
+   - particle effects
+   - sound stubs (no audio files required)
+   - balancing tuned for playability
+*/
 
-let keys = {};
-let gameRunning = false;
+const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+const miniC = document.getElementById('mini'), miniCtx = miniC.getContext('2d');
 
-document.addEventListener("keydown", e => keys[e.key] = true);
-document.addEventListener("keyup", e => keys[e.key] = false);
+const W = canvas.width, H = canvas.height;
+
+let running=false, paused=false;
+let wave = 1, score=0, toBossCounter = 3, wavesSinceBoss = 0;
+let enemies = [], bullets = [], particles = [], pickups = [];
+let lastTime = 0, accum = 0;
 
 let player = {
-    x: 400,
-    y: 500,
-    size: 20,
-    speed: 3,
-    hp: 100,
-    fireRate: 400,
-    lastShot: 0,
-    damage: 10
+  x: W/2, y: H - 100, w:22, h:22, speed: 3.4, hp: 100, maxHp: 100,
+  fireRate: 220, lastShot: 0, damage: 10, weapon: 'Basic',
+  dashCooldown: 0, dashMax: 2000, isDashing: false,
+  special: 0, specialMax: 100, specialActive: false
 };
 
-let projectiles = [];
-let enemies = [];
-let meteors = [];
-let wave = 1;
-let waveActive = false;
+const STATE = {menu:true};
+const UI = {
+  waveElem: document.getElementById('wave'),
+  hpElem: document.getElementById('hp'),
+  scoreElem: document.getElementById('score'),
+  weaponElem: document.getElementById('weaponName'),
+  dmgElem: document.getElementById('dmg'),
+  toBossElem: document.getElementById('toBoss'),
+  pickupsElem: document.getElementById('pickups'),
+  specialFill: document.getElementById('specialFill')
+};
 
-function spawnWave() {
-    waveActive = true;
-    let count = 5 + wave * 2;
+const upgradeMenu = document.getElementById('upgradeMenu');
+const optionsDiv = document.getElementById('options');
 
-    for (let i = 0; i < count; i++) {
-        enemies.push({
-            x: Math.random()*800,
-            y: -Math.random()*300 - 50,
-            size: 18,
-            speed: 1 + wave * 0.1,
-            hp: 20 + wave*5
-        });
-    }
+const mobile = {
+  left:false, right:false, up:false, down:false, fire:false
+};
+const keys = {};
+document.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; if (e.key===' '){ e.preventDefault(); }});
+document.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
 
-    // also meteors
-    for (let i = 0; i < 3 + wave; i++) {
-        meteors.push({
-            x: Math.random()*800,
-            y: -Math.random()*400 - 100,
-            size: 14 + Math.random()*10,
-            speed: 2 + wave*0.15
-        });
-    }
+document.getElementById('btnStart').onclick = ()=>{ if (!running) startRun(); };
+document.getElementById('btnRestart').onclick = ()=>{ location.reload(); };
+document.getElementById('btnPause').onclick = ()=> paused = !paused;
 
-    document.getElementById("waveNumber").textContent = wave;
-}
-
-function shoot() {
-    let now = performance.now();
-    if (now - player.lastShot < player.fireRate) return;
-    player.lastShot = now;
-
-    projectiles.push({
-        x: player.x,
-        y: player.y - 10,
-        dy: -6,
-        size: 4
+/* mobile touch */
+function setupMobile(){
+  const show = window.innerWidth <= 640;
+  if(show){ document.getElementById('mobileBtns').style.display='block'; }
+  ['mLeft','mRight','mUp','mDown','mFire'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('pointerdown', e=>{
+      e.preventDefault();
+      if(id==='mLeft') mobile.left=true;
+      if(id==='mRight') mobile.right=true;
+      if(id==='mUp') mobile.up=true;
+      if(id==='mDown') mobile.down=true;
+      if(id==='mFire') mobile.fire=true;
     });
-}
-
-function updatePlayer() {
-    if (keys["ArrowLeft"] || keys["a"]) player.x -= player.speed;
-    if (keys["ArrowRight"] || keys["d"]) player.x += player.speed;
-    if (keys["ArrowUp"] || keys["w"]) player.y -= player.speed;
-    if (keys["ArrowDown"] || keys["s"]) player.y += player.speed;
-
-    if (player.x < 10) player.x = 10;
-    if (player.x > 790) player.x = 790;
-    if (player.y < 10) player.y = 10;
-    if (player.y > 590) player.y = 590;
-
-    if (keys[" "]) shoot();
-}
-
-function updateProjectiles() {
-    projectiles = projectiles.filter(p => p.y > -20);
-    for (let p of projectiles) p.y += p.dy;
-}
-
-function updateEnemies() {
-    enemies = enemies.filter(e => e.hp > 0);
-    for (let e of enemies) {
-        e.y += e.speed;
-
-        if (dist(e.x, e.y, player.x, player.y) < e.size + player.size) {
-            player.hp -= 10;
-            e.hp = 0;
-            if (player.hp <= 0) gameOver();
-        }
-
-        for (let p of projectiles) {
-            if (dist(e.x, e.y, p.x, p.y) < e.size + p.size) {
-                e.hp -= player.damage;
-                p.y = -999;
-            }
-        }
-    }
-
-    if (enemies.length === 0 && meteors.length === 0 && waveActive) {
-        waveActive = false;
-        openUpgradeMenu();
-    }
-}
-
-function updateMeteors() {
-    meteors = meteors.filter(m => m.y < 700);
-    for (let m of meteors) {
-        m.y += m.speed;
-        m.x += Math.sin(m.y*0.02)*2;
-
-        if (dist(m.x, m.y, player.x, player.y) < m.size + player.size) {
-            player.hp -= 20;
-            m.y = 999;
-            if (player.hp <= 0) gameOver();
-        }
-    }
-}
-
-function draw() {
-    ctx.clearRect(0,0,800,600);
-
-    // player
-    ctx.fillStyle = "cyan";
-    ctx.fillRect(player.x - player.size/2, player.y - player.size/2, player.size, player.size);
-
-    // projectiles
-    ctx.fillStyle = "yellow";
-    for (let p of projectiles)
-        ctx.fillRect(p.x-2, p.y-10, 4, 10);
-
-    // enemies
-    ctx.fillStyle = "red";
-    for (let e of enemies)
-        ctx.fillRect(e.x - e.size/2, e.y - e.size/2, e.size, e.size);
-
-    // meteors
-    ctx.fillStyle = "orange";
-    for (let m of meteors)
-        ctx.beginPath(), ctx.arc(m.x, m.y, m.size, 0, Math.PI*2), ctx.fill();
-}
-
-function dist(x1,y1,x2,y2){
-    return Math.hypot(x1-x2, y1-y2);
-}
-
-function loop() {
-    if (!gameRunning) return;
-
-    updatePlayer();
-    updateProjectiles();
-    updateEnemies();
-    updateMeteors();
-    draw();
-
-    document.getElementById("hpText").textContent = player.hp;
-
-    requestAnimationFrame(loop);
-}
-
-function openUpgradeMenu() {
-    const menu = document.getElementById("upgradeMenu");
-    const options = document.getElementById("upgradeOptions");
-
-    const upgrades = [
-        {name:"+10 HP", apply:()=>player.hp+=10},
-        {name:"Faster Fire", apply:()=>player.fireRate=Math.max(100,player.fireRate-50)},
-        {name:"+2 Damage", apply:()=>player.damage+=2},
-        {name:"+1 Speed", apply:()=>player.speed+=0.5}
-    ];
-
-    // pick 3 random
-    let picks = [];
-    while (picks.length < 3) {
-        let u = upgrades[Math.floor(Math.random()*upgrades.length)];
-        if (!picks.includes(u)) picks.push(u);
-    }
-
-    options.innerHTML = "";
-
-    picks.forEach(upg => {
-        let btn = document.createElement("button");
-        btn.className = "upgradeBtn";
-        btn.textContent = upg.name;
-        btn.onclick = () => {
-            upg.apply();
-            menu.style.display = "none";
-            wave++;
-            spawnWave();
-        };
-        options.appendChild(btn);
+    el.addEventListener('pointerup', e=>{
+      e.preventDefault();
+      if(id==='mLeft') mobile.left=false;
+      if(id==='mRight') mobile.right=false;
+      if(id==='mUp') mobile.up=false;
+      if(id==='mDown') mobile.down=false;
+      if(id==='mFire') mobile.fire=false;
     });
+    el.addEventListener('pointerleave', ()=>{ mobile.left=mobile.right=mobile.up=mobile.down=mobile.fire=false; });
+  });
+}
+setupMobile();
 
-    menu.style.display = "block";
+/* utility */
+function rnd(min,max){ return Math.random()*(max-min)+min; }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+function dist(a,b,c,d){ return Math.hypot((a-c),(b-d)); }
+function now(){ return performance.now(); }
+
+/* particles for simple effects */
+function spawnParticle(x,y, vx,vy, life, color, size){
+  particles.push({x,y,vx,vy,life,age:0,color,size});
 }
 
-function gameOver() {
-    alert("Game Over — survived " + wave + " waves");
-    location.reload();
+/* bullets */
+function fireBullet(x,y,angle,spd, dmg, owner='player'){
+  bullets.push({x,y,dx:Math.cos(angle)*spd, dy:Math.sin(angle)*spd, r:4, dmg, owner, life:3000, born:now()});
 }
 
-function startGame() {
-    gameRunning = true;
-    spawnWave();
-    loop();
+/* enemy spawn logic including bosses */
+function spawnEnemy(type='basic', x, y){
+  const base = {
+    basic(){ return {type:'basic', x:x||rnd(40,W-40), y:y||-40, w:18,h:18, speed:40+wave*4, hp:8 + Math.floor(wave*4), color:'#9b2f2f', melee:true}; },
+    fast(){ return {type:'fast', x:x||rnd(40,W-40), y:y||-40, w:14,h:14, speed:120+wave*6, hp:6 + Math.floor(wave*3), color:'#ff6a3d', melee:true}; },
+    ranged(){ return {type:'ranged', x:x||rnd(40,W-40), y:y||-40, w:18,h:18, speed:30+wave*3, hp:10 + Math.floor(wave*4), color:'#7a3aa6', ranged:true, shootTimer:0}; },
+    tank(){ return {type:'tank', x:x||rnd(40,W-40), y:y||-40, w:28,h:28, speed:28+wave*2, hp:24 + Math.floor(wave*8), color:'#5a1d1d', melee:true}; },
+    boss(){ return {type:'boss', x:W/2, y:-120, w:140,h:140, speed:18, hp:200 + wave*160, color:'#111', boss:true, ang:0, phase:0}; }
+  };
+  const e = base[type] ? base[type]() : base['basic']();
+  enemies.push(e);
 }
 
-startGame();
+/* wave generation: cumulative types unlocked over time */
+function startWave(){
+  wavesSinceBoss++;
+  // unlock pool
+  const pool = ['basic'];
+  if(wave>=2) pool.push('fast');
+  if(wave>=3) pool.push('tank');
+  if(wave>=4) pool.push('ranged');
+  if(wave>=6) pool.push('fast','elite');
+  // spawn count scales with wave
+  let count = Math.floor(4 + wave*1.8);
+  for(let i=0;i<count;i++){
+    const t = pool[Math.floor(Math.random()*pool.length)];
+    spawnEnemy(t);
+  }
+  // occasional miniboss or boss depending on counter
+  if(wavesSinceBoss >= toBossCounter){
+    wavesSinceBoss = 0;
+    // spawn boss wave: one boss + some minions
+    spawnEnemy('boss');
+    for(let i=0;i<6;i++) spawnEnemy('fast', rnd(60,W-60), -rnd(40,200));
+    // double next boss threshold every few waves (or keep consistent)
+    toBossCounter = 3; // constant 3 waves then boss for simplicity
+  }
+
+  // chance to spawn obstacles (0-4)
+  const obstacles = Math.floor(rnd(0,5));
+  for(let o=0;o<obstacles;o++){
+    pickups.push({type:'obstacle', x:rnd(60,W-60), y:rnd(100,H-200), w:30, h:30, color:'#444'});
+  }
+
+  // reduce chance for helpful pickups per wave (rare)
+  if(Math.random() < clamp(0.04 + wave*0.005, 0.04, 0.18)) pickups.push({type:'score', x:rnd(60,W-60), y:rnd(60,H-120)});
+  if(Math.random() < clamp(0.03 + wave*0.004, 0.03, 0.12)) pickups.push({type:'recharge', x:rnd(60,W-60), y:rnd(60,H-120)});
+}
+
+/* enemy AI and update */
+function updateEnemies(dt){
+  for(let i=enemies.length-1;i>=0;i--){
+    const e = enemies[i];
+    if(e.boss){
+      // entrance then orbit; shoot bullet volleys occasionally
+      if(e.y < 120) e.y += e.speed*dt;
+      else {
+        e.ang += dt*0.6;
+        e.x = W/2 + Math.cos(e.ang)*120;
+        e.y = 140 + Math.sin(e.ang)*20;
+        // shoot radial bursts every few seconds (phase scales)
+        if(!e.lastShoot || now()-e.lastShoot > 1800 - Math.min(800, wave*40)){
+          e.lastShoot = now();
+          const bulletsCount = 18 + Math.min(12, Math.floor(wave/2));
+          for(let a=0;a<bulletsCount;a++){
+            const ang = (Math.PI*2) * (a/bulletsCount) + rnd(-0.08,0.08);
+            fireBullet(e.x, e.y, ang, 180 + wave*6, 6, 'enemy');
+          }
+        }
+      }
+    } else {
+      // homing towards player
+      const dx = player.x - e.x, dy = player.y - e.y;
+      const ang = Math.atan2(dy,dx);
+      const spd = e.speed * (1 + wave*0.02);
+      e.x += Math.cos(ang) * spd * dt;
+      e.y += Math.sin(ang) * spd * dt;
+
+      if(e.ranged){
+        e.shootTimer = (e.shootTimer||0) + dt*1000;
+        if(e.shootTimer > 1400 - Math.min(800,wave*30)){
+          e.shootTimer = 0;
+          // shoot toward player
+          const angp = Math.atan2(player.y - e.y, player.x - e.x);
+          fireBullet(e.x, e.y, angp, 240, 4, 'enemy');
+        }
+      }
+    }
+
+    // contact damage to player
+    const d = dist(e.x,e.y,player.x,player.y);
+    if(d < ( (e.w||20)/2 + player.w/2 )){
+      // apply contact damage, scaled by type
+      const dmg = e.boss ? 8 + Math.floor(wave*3) : (e.type==='fast'?3:4);
+      if(!e._hitRecently){ player.hp -= dmg; e._hitRecently = now(); spawnParticle(player.x, player.y, rnd(-1,1), rnd(-1,1), 500, 'orange', 6); }
+    }
+    // reset recent hit flag
+    if(e._hitRecently && now() - e._hitRecently > 450) delete e._hitRecently;
+
+    // remove if dead
+    if(e.hp <= 0){
+      // bigger explosion for boss/minions drop
+      const px = e.x, py = e.y;
+      const reward = e.boss ? 200 + wave*120 : 20 + Math.floor(wave*8);
+      score += reward;
+      // spawn loot drops
+      if(Math.random() < 0.9) pickups.push({type:'score', x:px + rnd(-20,20), y:py + rnd(-20,20)});
+      if(Math.random() < 0.6) pickups.push({type:'recharge', x:px + rnd(-20,20), y:py + rnd(-20,20)});
+      if(Math.random() < 0.35) pickups.push({type:'loot', x:px + rnd(-20,20), y:py + rnd(-20,20), kind:randomWeapon()});
+      for(let p=0;p<16;p++) spawnParticle(px,py,rnd(-2,2),rnd(-2,2),800,'#ff9',rnd(2,4));
+      enemies.splice(i,1);
+    }
+  }
+}
+
+/* bullets update (both player and enemy) */
+function updateBullets(dt){
+  const nowt = now();
+  for(let b=i=0;i<bullets.length;i++){ const bu=bullets[i];
+    bu.x += bu.dx*dt; bu.y += bu.dy*dt;
+    // lifetime
+    if(nowt - bu.born > bu.life){ bullets.splice(i,1); i--; continue; }
+    // collisions
+    if(bu.owner === 'player'){
+      for(let j=enemies.length-1;j>=0;j--){
+        const e = enemies[j];
+        if(dist(bu.x,bu.y,e.x,e.y) < (e.w||18)/2 + bu.r){
+          e.hp -= bu.dmg;
+          bullets.splice(i,1); i--;
+          spawnParticle(e.x, e.y, bu.dx*0.01 + rnd(-1,1), bu.dy*0.01 + rnd(-1,1), 400, 'yellow', 3);
+          break;
+        }
+      }
+    } else {
+      // enemy bullet hits player
+      if(dist(bu.x,bu.y,player.x,player.y) < player.w/2 + bu.r){
+        player.hp -= bu.dmg;
+        bullets.splice(i,1); i--;
+        spawnParticle(player.x,player.y, rnd(-2,2), rnd(-2,2), 600, 'red', 5);
+        continue;
+      }
+    }
+  }
+}
+
+/* pickups and obstacles */
+function updatePickups(){
+  for(let i=pickups.length-1;i>=0;i--){
+    const p = pickups[i];
+    // obstacles static; pickups pickup by player
+    if(p.type === 'obstacle') continue;
+    if(dist(p.x,p.y,player.x,player.y) < player.w/2 + 12){
+      if(p.type === 'score'){ score += 500; }
+      else if(p.type === 'recharge'){ player.special = clamp(player.special + 30, 0, player.specialMax); }
+      else if(p.type === 'loot'){ // weapon pickup -> temporary equip
+        equipWeapon(p.kind);
+      }
+      pickups.splice(i,1);
+    }
+  }
+}
+
+/* weapon logic */
+const WEAPONS = {
+  Basic: {name:'Basic', damageMul:1, fireAdjust:0},
+  Spread: {name:'Spread', damageMul:0.8, fireAdjust:-60},
+  Sniper: {name:'Sniper', damageMul:2.2, fireAdjust:240},
+  Burst: {name:'Burst', damageMul:0.9, fireAdjust: -120}
+};
+let currentWeapon = 'Basic';
+function equipWeapon(kind){
+  if(!kind) return;
+  currentWeapon = kind.name || kind;
+  player.weapon = currentWeapon;
+  player.damage = Math.round(10 * (WEAPONS[currentWeapon]?.damageMul || 1));
+  player.fireRate = 220 + (WEAPONS[currentWeapon]?.fireAdjust || 0);
+  UI.weaponElem.textContent = player.weapon;
+  UI.dmgElem.textContent = player.damage;
+  // brief display
+  UI.pickupsElem.textContent = 'Pegou arma: ' + player.weapon;
+  setTimeout(()=> UI.pickupsElem.textContent = '', 2500);
+}
+
+/* random weapon generator */
+function randomWeapon(){
+  const pool = [
+    {name:'Spread'}, {name:'Sniper'}, {name:'Burst'}, {name:'Basic'}
+  ];
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+/* special ability */
+function useSpecial(){
+  if(player.special >= player.specialMax){
+    // big radial wave
+    for(let a=0;a<360;a+=12){
+      const ang = a * Math.PI/180;
+      fireBullet(player.x, player.y, ang, 320, 8, 'player');
+    }
+    player.special = 0;
+    // small screen shake particles
+    for(let i=0;i<40;i++) spawnParticle(player.x + rnd(-40,40), player.y + rnd(-40,40), rnd(-4,4), rnd(-4,4), 800, '#fff', 3);
+  }
+}
+
+/* dash */
+function doDash(){
+  const nowt = now();
+  if(nowt - (player._lastDash||0) < player.dashMax) return;
+  player._lastDash = nowt;
+  player.isDashing = true;
+  const dir = (()=>{ if(keys['arrowleft']||keys['a']||mobile.left) return -1; if(keys['arrowright']||keys['d']||mobile.right) return 1; return 0; })();
+  const vy = (()=>{ if(keys['arrowup']||keys['w']||mobile.up) return -1; if(keys['arrowdown']||keys['s']||mobile.down) return 1; return 0; })();
+  const dx = dir || (Math.random()<0.5?-1:1);
+  // dash movement over short time
+  const dashDur = 220;
+  const start = now();
+  const from = {x:player.x,y:player.y};
+  const to = {x: clamp(player.x + dx * 160, player.w/2, W-player.w/2), y: clamp(player.y + vy * 100, player.h/2, H-player.h/2)};
+  const id = setInterval(()=>{
+    const t = (now()-start)/dashDur;
+    if(t>=1){ player.x=to.x; player.y=to.y; player.isDashing=false; clearInterval(id); return; }
+    player.x = from.x + (to.x - from.x) * (1 - Math.pow(1-t,3));
+    player.y = from.y + (to.y - from.y) * (1 - Math.pow(1-t,3));
+    spawnParticle(player.x + rnd(-8,8), player.y + rnd(-8,8), rnd(-1,1), rnd(-1,1), 220, '#9ff', 2);
+  }, 16);
+}
+
+/* upgrades between waves */
+function openUpgradeOptions(){
+  upgradeMenu.style.display = 'block';
+  optionsDiv.innerHTML = '';
+  const opts = generateUpgrades();
+  opts.forEach(opt=>{
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.innerText = opt.name;
+    b.onclick = ()=>{
+      opt.apply();
+      upgradeMenu.style.display = 'none';
+      wave++; UI.waveElem.textContent = wave;
+      startWave(); // resume with next wave
+    };
+    optionsDiv.appendChild(b);
+  });
+}
+function generateUpgrades(){
+  const avail = [
+    {name:'+20 HP', apply:()=>{ player.maxHp += 20; player.hp = Math.min(player.maxHp, player.hp + 20); }},
+    {name:'+5 Damage', apply:()=>{ player.damage += 5; }},
+    {name:'Faster Fire', apply:()=>{ player.fireRate = Math.max(80, player.fireRate - 40); }},
+    {name:'Dash Improvement (less CD)', apply:()=>{ player.dashMax = Math.max(800, player.dashMax - 350); }},
+    {name:'Special +30', apply:()=>{ player.special = clamp(player.special + 30, 0, player.specialMax); }},
+    {name:'Random Weapon', apply:()=>{ equipWeapon(randomWeapon()); }}
+  ];
+  // pick 3 distinct
+  const picks = [];
+  while(picks.length < 3){
+    const p = avail[Math.floor(Math.random()*avail.length)];
+    if(picks.indexOf(p) === -1) picks.push(p);
+  }
+  return picks;
+}
+
+/* start/stop */
+function startRun(){
+  running = true; paused = false; wave = 1; score = 0; wavesSinceBoss = 0; toBossCounter = 3;
+  UI.waveElem.textContent = wave;
+  player.hp = player.maxHp;
+  startWave();
+  lastTime = now();
+  requestAnimationFrame(loop);
+}
+function startWave(){
+  // clear obstacles (keep pickups)
+  // spawn enemies based on wave
+  startWaveInternal();
+}
+function startWaveInternal(){
+  // called when menu closed or first start
+  // spawn wave content
+  startWave(); // placeholder to keep naming consistent
+}
+
+/* main loop */
+function loop(t){
+  if(!running || paused){ lastTime = now(); requestAnimationFrame(loop); return; }
+  const dtMs = clamp(now() - lastTime, 1, 50); lastTime = now();
+  const dt = dtMs / 1000;
+
+  // input -> movement
+  const left = keys['arrowleft']||keys['a']||mobile.left;
+  const right = keys['arrowright']||keys['d']||mobile.right;
+  const up = keys['arrowup']||keys['w']||mobile.up;
+  const down = keys['arrowdown']||keys['s']||mobile.down;
+  const fire = keys[' ']||keys['z']||mobile.fire;
+
+  let vx = 0, vy = 0;
+  if(left) vx -= 1; if(right) vx += 1; if(up) vy -=1; if(down) vy +=1;
+  if(!player.isDashing){
+    const m = Math.hypot(vx,vy) || 1;
+    player.x += (vx/m) * player.speed * 60 * dt;
+    player.y += (vy/m) * player.speed * 60 * dt;
+  }
+  player.x = clamp(player.x, player.w/2, W - player.w/2);
+  player.y = clamp(player.y, player.h/2, H - player.h/2);
+
+  // firing
+  if(fire) {
+    // weapon modes
+    const nowt = now();
+    if(nowt - player.lastShot > player.fireRate){
+      player.lastShot = nowt;
+      const ang = -Math.PI/2;
+      if(player.weapon === 'Spread'){
+        fireBullet(player.x, player.y-8, ang + -0.26, 420, Math.round(player.damage*0.6));
+        fireBullet(player.x, player.y-8, ang + 0, 420, Math.round(player.damage*0.6));
+        fireBullet(player.x, player.y-8, ang + 0.26, 420, Math.round(player.damage*0.6));
+      } else if(player.weapon==='Sniper'){
+        fireBullet(player.x, player.y-8, ang, 720, Math.round(player.damage*1.8));
+      } else if(player.weapon==='Burst'){
+        for(let i=0;i<3;i++){
+          setTimeout(()=>fireBullet(player.x, player.y-8, ang + rnd(-0.03,0.03), 520, Math.round(player.damage)), i*70);
+        }
+      } else {
+        fireBullet(player.x, player.y-8, ang + rnd(-0.02,0.02), 520, player.damage);
+      }
+      spawnParticle(player.x, player.y-12, rnd(-1,1), rnd(-2,-0.5), 260, 'yellow', 2);
+    }
+  }
+
+  // dash (space)
+  if((keys['shift']||keys['x']) && !player.isDashing) doDash();
+
+  // special (e.g. 'e' key)
+  if((keys['e']||mobile.fire) && player.special >= player.specialMax){
+    useSpecial();
+  }
+
+  // regen special by time and kills
+  player.special = clamp(player.special + dt*6, 0, player.specialMax);
+  UI.specialFill.style.width = ((player.special/player.specialMax)*100)+'%';
+
+  // update arrays
+  updateEnemies(dt);
+  updateBullets(dt);
+  updatePickups();
+  // particles
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.age += dtMs;
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.04;
+    if(p.age >= p.life) particles.splice(i,1);
+  }
+
+  // If wave cleared and no boss present -> open upgrade menu
+  if(enemies.length === 0){
+    // clear obstacles left? keep pickups
+    openUpgradeOptions();
+    // pause loop until upgrade chosen
+    running = true; paused = false; // loop continues but upgrade menu blocks wave spawn until pick chosen
+    // show menu (openUpgradeOptions handles next wave)
+    // skip draw update to show menu visually
+  }
+
+  // draw
+  drawFrame();
+  // request next
+  requestAnimationFrame(loop);
+}
+
+/* draw frame */
+function drawFrame(){
+  ctx.clearRect(0,0,W,H);
+
+  // background grid
+  ctx.fillStyle = '#0a0b0c';
+  ctx.fillRect(0,0,W,H);
+  for(let gx=0;gx<W;gx+=40){ ctx.fillStyle='rgba(255,255,255,0.01)'; ctx.fillRect(gx,0,1,H); }
+  for(let gy=0;gy<H;gy+=40){ ctx.fillStyle='rgba(255,255,255,0.01)'; ctx.fillRect(0,gy,W,1); }
+
+  // pickups & obstacles
+  for(const p of pickups){
+    if(p.type==='obstacle'){
+      ctx.fillStyle = p.color || '#444';
+      ctx.fillRect(p.x - p.w/2, p.y - p.h/2, p.w, p.h);
+    } else if(p.type==='score'){
+      ctx.fillStyle = '#ffd24d';
+      ctx.fillRect(p.x-8,p.y-8,16,16);
+    } else if(p.type==='recharge'){
+      ctx.fillStyle = '#4de0ff';
+      ctx.fillRect(p.x-8,p.y-8,16,16);
+    } else if(p.type==='loot'){
+      ctx.fillStyle = '#c28cff';
+      ctx.fillRect(p.x-8,p.y-8,16,16);
+    }
+  }
+
+  // enemies
+  for(const e of enemies){
+    ctx.save();
+    if(e.boss){
+      // big dark boss with outline
+      ctx.fillStyle = e.color;
+      ctx.fillRect(e.x - e.w/2, e.y - e.h/2, e.w, e.h);
+      // boss HP bar
+      const barW = 120;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(e.x - barW/2, e.y - e.h/2 - 10, barW, 8);
+      ctx.fillStyle = '#ff6a6a';
+      const hpPerc = clamp(e.hp / (200 + wave*160), 0, 1);
+      ctx.fillRect(e.x - barW/2, e.y - e.h/2 - 10, barW * hpPerc, 8);
+    } else {
+      ctx.fillStyle = e.color;
+      ctx.fillRect(e.x - e.w/2, e.y - e.h/2, e.w, e.h);
+    }
+    ctx.restore();
+  }
+
+  // bullets
+  for(const b of bullets){
+    ctx.fillStyle = (b.owner==='player') ? '#ffd' : '#faa';
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+  }
+
+  // particles
+  for(const p of particles){
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = 1 - (p.age/p.life);
+    ctx.fillRect(p.x, p.y, p.size||2, p.size||2);
+    ctx.globalAlpha = 1;
+  }
+
+  // player
+  ctx.fillStyle = '#6ff';
+  ctx.fillRect(player.x - player.w/2, player.y - player.h/2, player.w, player.h);
+  // player hp bar
+  ctx.fillStyle = '#222'; ctx.fillRect(20, H-36, 220, 14);
+  ctx.fillStyle = '#4de07a'; ctx.fillRect(20, H-36, 220 * (player.hp / player.maxHp), 14);
+
+  // special overlay when ready
+  if(player.special >= player.specialMax){
+    ctx.strokeStyle = 'gold'; ctx.lineWidth = 3;
+    ctx.strokeRect(player.x - player.w/2 - 6, player.y - player.h/2 - 6, player.w + 12, player.h + 12);
+  }
+
+  // mini-map
+  drawMiniMap();
+
+  // UI text updates
+  UI.hpElem.textContent = Math.max(0, Math.round(player.hp));
+  UI.scoreElem.textContent = Math.round(score);
+  UI.waveElem.textContent = wave;
+  UI.toBossElem.textContent = Math.max(0, toBossCounter - wavesSinceBoss);
+}
+
+/* mini map draws player + pickups approximate */
+function drawMiniMap(){
+  miniCtx.clearRect(0,0,miniC.width, miniC.height);
+  miniCtx.fillStyle = '#071218'; miniCtx.fillRect(0,0,miniC.width,miniC.height);
+  // scale down factor
+  const sx = miniC.width / W, sy = miniC.height / H;
+  // pickups
+  for(const p of pickups){
+    if(p.type==='score'){ miniCtx.fillStyle = '#ffd24d'; miniCtx.fillRect(p.x*sx, p.y*sy, 3,3); }
+    if(p.type==='recharge'){ miniCtx.fillStyle = '#4de0ff'; miniCtx.fillRect(p.x*sx, p.y*sy, 3,3); }
+    if(p.type==='loot'){ miniCtx.fillStyle = '#c28cff'; miniCtx.fillRect(p.x*sx, p.y*sy, 3,3); }
+  }
+  // enemies as red dots
+  for(const e of enemies){ miniCtx.fillStyle = e.boss ? '#ff6a6a' : '#ff4d4d'; miniCtx.fillRect(e.x*sx, e.y*sy, 3,3); }
+  // player
+  miniCtx.fillStyle = '#6ff'; miniCtx.fillRect(player.x*sx, player.y*sy, 4,4);
+}
+
+/* helper to spawn initial content */
+function prepareInitial(){
+  // place some pickups & obstacles
+  pickups.push({type:'score', x:W/2+60, y:H/2});
+  pickups.push({type:'recharge', x:W/2-60, y:H/2});
+  for(let i=0;i<2;i++) pickups.push({type:'obstacle', x:rnd(80,W-80), y:rnd(120,H-200), w:30, h:30, color:'#333'});
+}
+
+/* random seed helpers */
+function rnd(min,max){ return Math.random()*(max-min)+min; }
+
+/* generate first wave when starting */
+function startRun(){
+  if(running) return;
+  running = true;
+  wave = 1; score = 0; wavesSinceBoss = 0; toBossCounter = 3;
+  UI.waveElem.textContent = wave; UI.scoreElem.textContent = score;
+  player.hp = player.maxHp;
+  prepareInitial();
+  spawnWave();
+  lastTime = now();
+  requestAnimationFrame(loop);
+}
+
+/* spawnWave original wrapper */
+function spawnWave(){
+  // spawn new wave content
+  const pool = ['basic'];
+  if(wave>=2) pool.push('fast');
+  if(wave>=3) pool.push('tank');
+  if(wave>=4) pool.push('ranged');
+  // number of enemies
+  const count = Math.floor(4 + wave * 1.6);
+  for(let i=0;i<count;i++){
+    const t = pool[Math.floor(Math.random()*pool.length)];
+    spawnEnemy(t);
+  }
+  // boss logic
+  wavesSinceBoss++;
+  if(wavesSinceBoss >= toBossCounter){
+    spawnEnemy('boss');
+    wavesSinceBoss = 0;
+  }
+  // obstacles 0..4
+  for(let k=0;k<Math.floor(rnd(0,5));k++){
+    pickups.push({type:'obstacle', x:rnd(60,W-60), y:rnd(100,H-200), w:30, h:30, color:'#444'});
+  }
+  // pickups rare
+  if(Math.random() < 0.06) pickups.push({type:'score', x:rnd(60,W-60), y:rnd(60,H-120)});
+  if(Math.random() < 0.05) pickups.push({type:'recharge', x:rnd(60,W-60), y:rnd(60,H-120)});
+}
+
+/* initial UI wiring */
+document.getElementById('btnStart').addEventListener('click', ()=>{ startRun(); });
+document.getElementById('btnPause').addEventListener('click', ()=>{ paused = !paused; });
+document.getElementById('btnRestart').addEventListener('click', ()=>{ location.reload(); });
+
+/* initial equip */
+equipWeapon('Basic');
+
+/* small helper to not block when wave cleared:
+   openUpgradeOptions shows menu and when option chosen wave++ and spawnWave() is called
+*/
+function openUpgradeOptions(){
+  upgradeMenu.style.display = 'block';
+  optionsDiv.innerHTML = '';
+  const opts = generateUpgrades();
+  for(const o of opts){
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = o.name;
+    b.onclick = ()=>{ o.apply(); upgradeMenu.style.display='none'; wave++; UI.waveElem.textContent = wave; spawnWave(); };
+    optionsDiv.appendChild(b);
+  }
+}
+
+/* start paused menu on load */
+UI.waveElem.textContent = wave;
+UI.hpElem.textContent = player.hp;
+UI.scoreElem.textContent = score;
+UI.weaponElem.textContent = player.weapon;
+UI.dmgElem.textContent = player.damage;
+UI.toBossElem.textContent = toBossCounter - wavesSinceBoss;
+
+/* small touch: begin on click if mobile */
+canvas.addEventListener('pointerdown', ()=>{ if(!running) startRun(); });
+
+/* helper to return random between */
+function rnd(min,max){ return Math.random()*(max-min)+min; }
 </script>
-
 </body>
 </html>
