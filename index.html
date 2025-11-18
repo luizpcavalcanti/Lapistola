@@ -1,801 +1,427 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Turn-Based Gunslinger — One File</title>
+<title>RPG Roguelike — Single File</title>
 <style>
-  :root{--bg:#0c0c10;--panel:#0f1720;--accent:#d9c07b;--mut:#6de0d6;--danger:#ff6b6b}
-  html,body{height:100%;margin:0;background:var(--bg);color:#e6eef6;font-family:Inter,Arial,Helvetica,sans-serif}
-  #wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:18px}
-  canvas{background:#071027;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,0.6);display:block}
-  #ui{width:960px;display:flex;gap:12px;align-items:flex-start;margin-left:18px}
-  .panel{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));padding:12px;border-radius:8px;min-width:220px}
-  h2{margin:4px 0 8px 0;font-size:16px;color:var(--accent)}
-  .small{font-size:12px;color:#b9c2d0}
-  button{padding:8px 10px;border-radius:6px;border:0;background:#1f2a36;color:#fff;cursor:pointer}
-  .mut-list{max-height:220px;overflow:auto;font-size:13px}
-  #log{height:160px;overflow:auto;background:#071826;padding:8px;border-radius:6px;font-family:monospace;font-size:12px}
-  .tilePreview{mix-blend-mode:multiply;opacity:0.85}
+  html,body{height:100%;margin:0;background:#111;color:#ddd;font-family:Verdana}
+  #wrap{height:100%;display:flex;align-items:center;justify-content:center}
+  canvas{border:0.45rem outset #555;background:#222;display:block}
+  #hud{position:absolute;top:10px;left:12px;font-size:14px;color:#fff}
+  #menu,#death{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;background:rgba(0,0,0,0.6)}
+  button{padding:8px 12px;margin:6px;cursor:pointer;font-size:16px}
+  .small{font-size:13px;color:#bbb}
 </style>
 </head>
+
 <body>
-<div style="display:flex;align-items:center;justify-content:center;gap:12px">
-  <canvas id="ctx" width="720" height="640"></canvas>
+<div id="wrap">
+  <canvas id="game" width="900" height="800"></canvas>
 
-  <div id="ui">
-    <div class="panel" style="flex:0 0 280px">
-      <h2>Turn-Based Gunslinger</h2>
-      <div class="small">Click to move (limited per turn). Left-click (or Space) to shoot. Right-click to use special when charged. TAB toggles details.</div>
-      <div style="margin-top:8px">
-        <button id="btnStart">Start Run</button>
-        <button id="btnEndTurn">End Turn</button>
-      </div>
+  <div id="hud"></div>
 
-      <div style="margin-top:10px">
-        <div><b>Turn:</b> <span id="turnLabel">—</span></div>
-        <div><b>Phase:</b> <span id="phaseLabel">—</span></div>
-        <div class="small" id="apLabel"></div>
-      </div>
+  <div id="menu">
+    <h2>RPG Roguelike</h2>
+    <div class="small">WASD mover • Mouse mirar/atacar • Prossiga sala a sala</div>
+    <button id="startBtn">Iniciar Aventura</button>
+    <div class="small">Salas geradas, inimigos acumulativos, loot e mini-bosses.</div>
+  </div>
 
-      <div style="margin-top:10px">
-        <b>Player</b><br>
-        <div id="playerStats" class="small"></div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>Run Details</h2>
-      <div id="upgrades" class="small"></div>
-      <div id="mutations" class="small mut-list" style="margin-top:8px"></div>
-      <div style="margin-top:8px">
-        <b>Log</b>
-        <div id="log"></div>
-      </div>
-    </div>
+  <div id="death" style="display:none">
+    <h2>MORTO</h2>
+    <div id="deathStats" class="small" style="margin-bottom:8px"></div>
+    <button id="restartBtn">Recomeçar</button>
   </div>
 </div>
 
 <script>
-/*
-  Turn-Based Gunslinger — Single index file
-  - Turn-based loop: Player phase (AP-based) -> Enemy preview/move -> Enemy attack -> back
-  - Infinite levels with scaling difficulty
-  - Numeric Upgrades & Mutations (stackable)
-  - Enemy types with telegraphed attacks
-  - Rewards on level-up and boss kills
-*/
+/* ===========================================================
+   RPG ROGUELIKE — UMA ÚNICA PÁGINA / ARQUIVO
+   - Mapa procedural de salas
+   - Mesma estética e tipos de inimigos
+   - Itens, progressão, mini-bosses
+   - Roguelike simples
+   =========================================================== */
 
-/* ---------------------- Config & Globals ---------------------- */
-const canvas = document.getElementById('ctx');
-const ctx = canvas.getContext('2d');
-const logEl = document.getElementById('log');
-const turnLabel = document.getElementById('turnLabel');
-const phaseLabel = document.getElementById('phaseLabel');
-const apLabel = document.getElementById('apLabel');
-const playerStatsEl = document.getElementById('playerStats');
-const upgradesEl = document.getElementById('upgrades');
-const mutationsEl = document.getElementById('mutations');
-const btnStart = document.getElementById('btnStart');
-const btnEndTurn = document.getElementById('btnEndTurn');
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const HUD = document.getElementById("hud");
 
-const W = canvas.width, H = canvas.height;
+const menu = document.getElementById("menu");
+const death = document.getElementById("death");
+const deathStats = document.getElementById("deathStats");
+const startBtn = document.getElementById("startBtn");
+const restartBtn = document.getElementById("restartBtn");
 
-/* audio placeholders (optional) */
-// const snd = { shoot: new Audio('...'), powerup: new Audio('...') };
+let state = "menu"; // menu | game | death
+let last = 0;
 
-/* utility */
-function rand(min,max){ return Math.random()*(max-min)+min; }
-function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
-function now(){ return performance.now(); }
-function addLog(t){ const p = document.createElement('div'); p.textContent = t; logEl.appendChild(p); logEl.scrollTop = logEl.scrollHeight; }
-
-/* ---------------------- Game State ---------------------- */
-let state = {
-  turn: 1,
-  phase: 'idle', // 'playerPreview'(entering player phase) | 'player' | 'enemyPreview' | 'enemyAction' | 'gameover'
-  player: null,
-  enemies: {}, // id -> enemy
-  bullets: {},
-  pickups: {},
-  previewZones: [], // telegraphed enemy attacks for the upcoming enemyAction
-  level: 1,
-  killsThisLevel: 0,
-  enemiesToClear: 6,
-  enemyPool: ['basic'],
-  AP_MAX: 4, // action points per player turn (move/shoot consume AP)
-  logs: []
-};
-
-/* stats */
-let stats = { shots:0, kills:0, damageTaken:0, timeStart:0 };
-
-/* ---------------------- Upgrades & Mutations ---------------------- */
-const Upgrades = {
-  move:0, fireRate:0, damage:0, clip:0, specialCharge:0, maxHP:0
-};
-const UPGRADE_POOL = [
-  {key:'move', name:'Move Speed'},
-  {key:'damage', name:'Damage'},
-  {key:'clip', name:'Clip Size'},
-  {key:'specialCharge', name:'Special Charge'},
-  {key:'maxHP', name:'Max HP'}
-];
-
-const Mutations = {}; // id -> {level, id, name, desc}
-
-const MUTATION_POOL = [
-  {id:'double_shot', name:'Double Shot', desc:'Shoots 2 bullets (consumes same AP).'},
-  {id:'ricochet', name:'Ricochet', desc:'Bullets bounce once.'},
-  {id:'pierce', name:'Pierce', desc:'Bullets pierce 1 extra enemy per level.'},
-  {id:'vampiric', name:'Vampiric', desc:'Gain HP on kill.'},
-  {id:'overcharge', name:'Overcharge', desc:'Special attack cost lowered.'},
-  {id:'bleed', name:'Bleed', desc:'Enemies take damage over time when hit.'},
-  {id:'reflect', name:'Reflect Shield', desc:'If in cover, reflect a bullet once per enemy turn.'}
-];
-
-/* ---------------------- Enemy Types ---------------------- */
-const ENEMY_TYPES = {
-  basic: { color:'#b3403c', life:3, move:1.0, attackRange:60, dmg:2, pattern:'melee' },
-  fast: { color:'#ff8a65', life:2, move:1.6, attackRange:50, dmg:1, pattern:'dash' },
-  tank: { color:'#5d6d7e', life:6, move:0.6, attackRange:80, dmg:3, pattern:'stomp' },
-  shooter: { color:'#a37be0', life:4, move:0.7, attackRange:240, dmg:2, pattern:'ranged' },
-  splitter: { color:'#b87a32', life:3, move:1.1, attackRange:40, dmg:1, pattern:'split' },
-  elite: { color:'#f9c74f', life:5, move:1.2, attackRange:90, dmg:3, pattern:'combo' },
-  boss: { color:'#00b4d8', life:16, move:0.5, attackRange:140, dmg:4, pattern:'boss' }
-};
-
-/* ---------------------- Helper / ID ---------------------- */
-function uid(prefix='id'){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
-
-/* ---------------------- Player & Entities ---------------------- */
+/* ===========================================================
+   PLAYER
+=========================================================== */
+let player;
 function createPlayer(){
-  state.player = {
-    x: W/2, y: H-90, r:18,
-    hp: 10 + Upgrades.maxHP*2,
-    maxHp: 10 + Upgrades.maxHP*2,
-    ap: state.AP_MAX,
-    movePerAP: 80 + Upgrades.move*12, // pixels per AP unit
-    clip: 6 + Upgrades.clip*2,
-    ammo: 6 + Upgrades.clip*2,
-    specialCharge: 0,
-    specialCost: 6 - (Upgrades.specialCharge || 0),
-    dmg: 3 + Upgrades.damage,
-    aimAngle: -90, // degrees
-    invuln:false
+  player = {
+    x:450, y:400, w:22, h:22,
+    hp:12, hpMax:12,
+    atk:4, def:1, crit:0.1,
+    speed:140,
+    facing:0,
+    atkCD:0,
+    pressing:{up:false,down:false,left:false,right:false},
+    inventory:[]
   };
 }
 
-/* spawn enemy at edge */
-function spawnEnemy(type, x=null, y=null){
-  const spec = ENEMY_TYPES[type] || ENEMY_TYPES.basic;
-  const id = uid('e');
-  // default spawn: random edge
-  let sx = x, sy = y;
-  if (sx === null){
-    const edge = Math.random();
-    if (edge < 0.25){ sx = rand(60, W-60); sy = -40; }
-    else if (edge < 0.5){ sx = rand(60, W-60); sy = H + 40; }
-    else if (edge < 0.75){ sx = -40; sy = rand(60, H-200); }
-    else { sx = W + 40; sy = rand(60, H-200); }
+/* ===========================================================
+   MUNDO / SALAS
+=========================================================== */
+let room = { index:1, cleared:false };
+let enemies = {};
+let bullets = {};
+let pickups = {};
+
+function generateRoom(){
+  room = { index: room.index+1, cleared:false };
+  enemies = {};
+  bullets = {};
+  pickups = {};
+
+  const amount = 3 + Math.floor(room.index*0.5);
+
+  for(let i=0;i<amount;i++){
+    spawnEnemyRandom();
   }
-  state.enemies[id] = {
-    id, type, x: sx, y: sy, r:18,
-    hp: spec.life + Math.floor(state.level/3),
-    spec,
-    willTarget: null, // computed each enemy preview
-    previewZone: null // {x,y,r,kind}
+
+  // mini boss
+  if(room.index % 3 === 0){
+    spawnMiniBoss();
+  }
+}
+
+function spawnEnemyRandom(){
+  const pool = ["basic"];
+  if(room.index >=2) pool.push("fast");
+  if(room.index >=3) pool.push("tank");
+  if(room.index >=4) pool.push("ranged");
+  if(room.index >=5) pool.push("elite");
+
+  const type = pool[Math.floor(Math.random()*pool.length)];
+  spawnEnemy(type);
+}
+
+const ENEMY_TYPES = {
+  basic: {life:4, speed:60, color:"maroon"},
+  fast: {life:3, speed:110, color:"orangered"},
+  tank: {life:10, speed:35, color:"darkred"},
+  ranged:{life:5, speed:40, color:"purple", ranged:true},
+  elite:{life:8, speed:70, color:"goldenrod"},
+  miniboss:{life:20, speed:55, color:"black", boss:true}
+};
+
+function spawnMiniBoss(){
+  spawnEnemy("miniboss");
+}
+
+function spawnEnemy(type){
+  const spec = ENEMY_TYPES[type];
+  const id = Math.random().toString(36).slice(2);
+
+  enemies[id] = {
+    id, type,
+    x: Math.random()*800+50,
+    y: Math.random()*700+50,
+    w:28, h:28,
+    life: spec.life,
+    color: spec.color,
+    ranged: spec.ranged || false,
+    boss: spec.boss || false,
+    speed: spec.speed
   };
 }
 
-/* ---------------------- Level / Progression ---------------------- */
-function initRun(){
-  state.level = 1;
-  state.enemyPool = ['basic'];
-  state.killsThisLevel = 0;
-  state.enemiesToClear = 6;
-  state.turn = 1;
-  state.phase = 'player';
-  stats = { shots:0, kills:0, damageTaken:0, timeStart: now() };
-  for (const k in Upgrades) Upgrades[k] = 0;
-  for (const k in Mutations) delete Mutations[k];
-  // create player and initial enemies
-  createPlayer();
-  state.enemies = {};
-  state.pickups = {};
-  spawnInitialWave();
-  addLog('Run started — Level 1');
-  updateUI();
+/* ===========================================================
+   TIROS
+=========================================================== */
+function spawnBullet(x,y,angle,damage,owner){
+  const id = Math.random().toString(36).slice(2);
+  bullets[id] = {
+    id, x,y, w:6, h:6,
+    xs: Math.cos(angle)*420,
+    ys: Math.sin(angle)*420,
+    damage, owner
+  };
 }
 
-/* spawn initial wave (level-based) */
-function spawnInitialWave(){
-  // spawn a small wave depending on level
-  const baseline = Math.round(4 + state.level * 1.25);
-  for (let i = 0; i < baseline; i++){
-    // choose random type from pool
-    const t = state.enemyPool[Math.floor(Math.random()*state.enemyPool.length)];
-    spawnEnemy(t);
-  }
-  // place boss occasionally
-  if (state.level % 6 === 0){
-    spawnEnemy('boss', W/2, -120);
-    addLog('Boss enters the arena!');
-  }
-  computeEnemyPreviews();
+/* inimigos shoot */
+function spawnEnemyBullet(x,y,angle){
+  spawnBullet(x,y,angle,2,"enemy");
 }
 
-/* when clearing level */
-function advanceLevel(){
-  state.level++;
-  // unlock new enemy types by level
-  const unlocks = {2:'fast',3:'tank',4:'shooter',5:'splitter',7:'elite',9:'tank',11:'shooter'};
-  const u = unlocks[state.level];
-  if (u && !state.enemyPool.includes(u)) state.enemyPool.push(u);
-  state.enemiesToClear = Math.round(5 + state.level * 1.6);
-  state.killsThisLevel = 0;
-  addLog('LEVEL → ' + state.level);
-  // reward (70% mutation, 30% upgrade)
-  if (Math.random() < 0.7) grantRandomMutation();
-  else grantRandomUpgrade();
-  spawnInitialWave();
-  updateUI();
+/* ===========================================================
+   LOOT
+=========================================================== */
+function spawnPickup(type,x,y){
+  const id = Math.random().toString(36).slice(2);
+  pickups[id] = {
+    id, x,y, w:14, h:14,
+    type
+  };
 }
 
-/* ---------------------- Mutations & Upgrades Apply ---------------------- */
-function grantRandomUpgrade(){
-  const pick = UPGRADE_POOL[Math.floor(Math.random()*UPGRADE_POOL.length)];
-  Upgrades[pick.key] = (Upgrades[pick.key] || 0) + 1;
-  addLog('UPGRADE: ' + pick.name + ' → L' + Upgrades[pick.key]);
-  applyUpgrades();
+function dropLoot(e){
+  const r = Math.random();
+  if(r<0.3) spawnPickup("heal",e.x,e.y);
+  else if(r<0.5) spawnPickup("atk",e.x,e.y);
+  else if(r<0.7) spawnPickup("def",e.x,e.y);
+  else if(r<0.75) spawnPickup("crit",e.x,e.y);
 }
 
-function grantRandomMutation(){
-  const notHave = MUTATION_POOL.filter(m => !Mutations[m.id]);
-  const pick = (notHave.length ? notHave[Math.floor(Math.random()*notHave.length)] : MUTATION_POOL[Math.floor(Math.random()*MUTATION_POOL.length)]);
-  applyMutation(pick);
-}
+/* ===========================================================
+   UPDATE
+=========================================================== */
+function update(dt){
+  // player
+  let dx = 0, dy = 0;
+  if(player.pressing.up) dy -= 1;
+  if(player.pressing.down) dy += 1;
+  if(player.pressing.left) dx -= 1;
+  if(player.pressing.right) dx += 1;
 
-function applyMutation(m){
-  if (!Mutations[m.id]) Mutations[m.id] = { level: 1, ...m };
-  else Mutations[m.id].level++;
-  addLog('MUTATION: ' + m.name + ' L' + Mutations[m.id].level);
-  applyAllMutations();
-}
+  const mag = Math.hypot(dx,dy);
+  if(mag>0){ dx/=mag; dy/=mag; }
 
-function applyUpgrades(){
-  // update player stats if exists
-  if (state.player){
-    state.player.movePerAP = 80 + Upgrades.move*12;
-    state.player.clip = 6 + Upgrades.clip*2;
-    state.player.maxHp = 10 + Upgrades.maxHP*2;
-    state.player.dmg = 3 + Upgrades.damage;
-    state.player.specialCost = Math.max(2, 6 - (Upgrades.specialCharge || 0));
-    state.player.hp = Math.min(state.player.hp, state.player.maxHp);
-  }
-}
+  player.x += dx * player.speed * dt;
+  player.y += dy * player.speed * dt;
 
-function applyAllMutations(){
-  // some short flags on player, recalculated after mutation change
-  if (!state.player) return;
-  state.player.doubleShot = !!Mutations['double_shot'];
-  state.player.ricochet = !!Mutations['ricochet'];
-  state.player.pierce = !!Mutations['pierce'];
-  state.player.vampiric = !!Mutations['vampiric'];
-  state.player.overcharge = !!Mutations['overcharge'];
-  state.player.bleed = !!Mutations['bleed'];
-  state.player.reflect = !!Mutations['reflect'];
-}
+  player.x = Math.max(20,Math.min(880,player.x));
+  player.y = Math.max(20,Math.min(780,player.y));
 
-/* ---------------------- Enemy Preview & AI (turn-based) ---------------------- */
-/* Each enemy computes a 'previewZone' which is where it'll attack next phase.
-   Player can see those zones during player phase to react. */
+  if(player.atkCD>0) player.atkCD -= dt;
 
-function computeEnemyPreviews(){
-  state.previewZones = [];
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    const spec = e.spec;
-    // Simple AI strategies based on pattern
-    if (spec.pattern === 'ranged'){
-      // telegraph an aim line toward player (a zone at player position)
-      e.willTarget = { x: state.player.x, y: state.player.y };
-      e.previewZone = { x: state.player.x, y: state.player.y, r: spec.attackRange, kind:'circle' };
-    } else if (spec.pattern === 'dash'){
-      // will try to dash towards player's current position
-      const dirX = state.player.x;
-      const dirY = state.player.y;
-      const targetX = (e.x + dirX) / 2;
-      const targetY = (e.y + dirY) / 2;
-      e.willTarget = { x: targetX, y: targetY };
-      e.previewZone = { x: targetX, y: targetY, r: 34, kind:'circle' };
-    } else if (spec.pattern === 'split'){
-      // melee splitter: will close in and then split on kill — preview is close circle
-      e.willTarget = { x: state.player.x, y: state.player.y };
-      e.previewZone = { x: e.x + (state.player.x - e.x) * 0.35, y: e.y + (state.player.y - e.y) * 0.35, r: 36, kind:'circle' };
-    } else if (spec.pattern === 'boss'){
-      // boss telegraphs a big cone/zone toward player
-      const tx = state.player.x, ty = state.player.y;
-      e.willTarget = { x: tx, y: ty };
-      e.previewZone = { x: (e.x + tx)/2, y: (e.y + ty)/2, r: 120, kind:'circle' };
-    } else {
-      // default melee
-      const tx = (e.x + state.player.x)/2;
-      const ty = (e.y + state.player.y)/2;
-      e.willTarget = { x: tx, y: ty };
-      e.previewZone = { x: tx, y: ty, r: 40, kind:'circle' };
-    }
-    state.previewZones.push({ ...e.previewZone, owner:id, color: e.spec.color });
-  }
-}
+  // enemies
+  for(const id in enemies){
+    const e = enemies[id];
+    const a = Math.atan2(player.y-e.y, player.x-e.x);
 
-/* ---------------------- Player Actions (AP system) ---------------------- */
-/* AP costs:
-   - Move one AP: movePerAP pixels
-   - Shoot: 1 AP per shot
-   - Special: cost specialCost AP
-*/
+    e.x += Math.cos(a)*e.speed*dt;
+    e.y += Math.sin(a)*e.speed*dt;
 
-function playerMoveTo(x,y){
-  if (state.phase !== 'player') return;
-  if (state.player.ap <= 0){ addLog('No AP remaining.'); return; }
-  // move limited distance per AP: movePerAP consumes 1 AP per chunk
-  const dx = x - state.player.x;
-  const dy = y - state.player.y;
-  const dist = Math.hypot(dx,dy);
-  const apNeeded = Math.ceil(dist / state.player.movePerAP);
-  if (apNeeded > state.player.ap){ addLog('Not enough AP to move that far.'); return; }
-  // perform move
-  state.player.x = clamp(x, 40, W-40);
-  state.player.y = clamp(y, 60, H-90);
-  state.player.ap -= apNeeded;
-  addLog(`You move (${apNeeded} AP). AP left: ${state.player.ap}`);
-  updateUI();
-  // after any action, recompute previews (enemies will still attack the zone they telegraphed)
-  computeEnemyPreviews();
-}
-
-function playerShootAt(targetX, targetY){
-  if (state.phase !== 'player') return;
-  if (state.player.ap <= 0){ addLog('No AP to shoot.'); return; }
-  if (state.player.ammo <= 0){
-    addLog('Out of ammo. Use special to reload or pick up ammo.');
-    return;
-  }
-  // consume
-  state.player.ap -= 1;
-  state.player.ammo -= 1;
-  stats.shots++;
-  addLog('You shoot.');
-
-  // create a simple instant-hit mechanic: find first enemy along line
-  // We'll check closest enemy in angle cone and apply damage
-  const dx = targetX - state.player.x, dy = targetY - state.player.y;
-  const ang = Math.atan2(dy,dx);
-  // find enemies within a narrow angle and distance
-  let hitList = [];
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    const vx = e.x - state.player.x, vy = e.y - state.player.y;
-    const d = Math.hypot(vx,vy);
-    if (d > 600) continue;
-    const a = Math.abs(Math.atan2(vy,vx) - ang);
-    if (a < 0.4){ hitList.push({e,d,id}); }
-  }
-  hitList.sort((a,b)=>a.d-b.d);
-
-  // number of projectiles considering mutations
-  const shots = (Mutations['double_shot'] ? 2 : 1);
-  let shotApplied = 0;
-  for (let s=0; s<shots; s++){
-    if (!hitList[shotApplied]) break;
-    const target = state.enemies[hitList[shotApplied].id];
-    if (!target) { shotApplied++; continue; }
-    const baseDmg = state.player.dmg;
-    let dmg = baseDmg;
-    if (Mutations['overcharge'] && state.player.specialCharge > 0){
-      dmg += 2 * Mutations['overcharge'].level;
-    }
-    target.hp -= dmg;
-    addLog(`Hit ${target.type} for ${dmg} dmg.`);
-    stats.kills += 0;
-    // vampiric
-    if (Mutations['vampiric']){
-      const gain = Mutations['vampiric'].level;
-      state.player.hp = Math.min(state.player.maxHp, state.player.hp + gain);
-      addLog(`Vampiric heals you for ${gain}.`);
-    }
-    // bleed
-    if (Mutations['bleed']){
-      target._bleed = (target._bleed || 0) + (Mutations['bleed'].level || 1);
-    }
-    // pierce allows to hit extra target in list
-    if (Mutations['pierce']){
-      // each level allows extra pierce
-      const pierceCount = Mutations['pierce'].level;
-      shotApplied += pierceCount;
-    } else shotApplied++;
-  }
-
-  // cleanup dead
-  for (const id in state.enemies){
-    if (state.enemies[id].hp <= 0){
-      handleEnemyDeath(id);
-    }
-  }
-
-  updateUI();
-  computeEnemyPreviews();
-}
-
-/* special: big radial attack (consumes specialCost AP) */
-function playerSpecial(){
-  if (state.phase !== 'player') return;
-  const cost = state.player.specialCost || 6;
-  if (state.player.ap < cost){ addLog('Not enough AP for special.'); return; }
-  state.player.ap -= cost;
-  state.player.specialCharge = 0;
-  addLog('You unleash SPECIAL!');
-  // radial instant damage to nearby enemies
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    const d = Math.hypot(e.x - state.player.x, e.y - state.player.y);
-    if (d < 220){
-      const dmg = Math.round(6 + (Upgrades.damage||0));
-      e.hp -= dmg;
-      addLog(`Special hits ${e.type} for ${dmg}.`);
-      if (Mutations['vampiric']) {
-        state.player.hp = Math.min(state.player.maxHp, state.player.hp + Mutations['vampiric'].level);
-      }
-      if (e.hp <= 0) handleEnemyDeath(id);
-    }
-  }
-  updateUI();
-  computeEnemyPreviews();
-}
-
-/* ---------------------- Enemy Action Phase ---------------------- */
-async function enemyPhase(){
-  state.phase = 'enemyPreview';
-  phaseLabel.textContent = 'Enemy (Preview)';
-  addLog('Enemies prepare their actions...');
-  await waitMs(450);
-
-  // move: enemies move one step toward their willTarget (computed previously)
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    const t = e.willTarget || { x: state.player.x, y: state.player.y };
-    const dx = t.x - e.x, dy = t.y - e.y;
-    const mv = (e.spec.move * (1 + state.level*0.02)) * 24; // tile-ish movement scalar
-    const dist = Math.hypot(dx,dy);
-    if (dist > 1){
-      const nx = e.x + (dx/dist) * Math.min(mv, dist);
-      const ny = e.y + (dy/dist) * Math.min(mv, dist);
-      e.x = nx; e.y = ny;
-    }
-  }
-  computeEnemyPreviews();
-  await waitMs(380);
-
-  // attack resolution: enemies do damage if player inside their preview zone when they attack
-  state.phase = 'enemyAction';
-  phaseLabel.textContent = 'Enemy (Action)';
-  addLog('Enemies act!');
-  // apply bleed and other per-enemy effects first
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    if (e._bleed && e._bleed > 0){
-      const bleedDmg = 0.3 * e._bleed;
-      e.hp -= bleedDmg;
-      e._bleed = Math.max(0, e._bleed - 0.6);
-      if (e.hp <= 0) handleEnemyDeath(id);
-    }
-  }
-
-  // attack each enemy's preview zone
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    const zone = e.previewZone || { x:e.x, y:e.y, r:e.spec.attackRange || 40 };
-    // compute distance to player
-    const pd = Math.hypot(state.player.x - zone.x, state.player.y - zone.y);
-    if (pd <= zone.r + state.player.r/2){
-      // player hit
-      const dmg = Math.round(e.spec.dmg + state.level * 0.1);
-      // reflect shield
-      if (state.player.reflect && insideCover(state.player.x, state.player.y)){
-        addLog('You reflect an incoming attack!');
-        // reflect removes the incoming damage, maybe deals back
-      } else {
-        state.player.hp -= dmg;
-        stats.damageTaken += dmg;
-        addLog(`You are hit for ${dmg}!`);
+    // ranged attack
+    if(e.ranged){
+      if(!e.cd) e.cd = 1+Math.random()*1;
+      e.cd -= dt;
+      if(e.cd<=0){
+        spawnEnemyBullet(e.x,e.y,a);
+        e.cd = 1.5+Math.random()*2;
       }
     }
-    // special enemy on-kill effects: e.g., splitter spawns new enemies when killed (handled at death)
   }
 
-  await waitMs(300);
-  // cleanup (deads may have been queued)
-  // check player death
-  if (state.player.hp <= 0){
-    state.phase = 'gameover';
-    addLog('You died. Run over.');
-    endRun();
-    return;
-  }
+  // bullets
+  for(const id in bullets){
+    const b = bullets[id];
+    b.x += b.xs * dt;
+    b.y += b.ys * dt;
 
-  // refill AP and increment turn
-  state.turn++;
-  state.player.ap = state.AP_MAX;
-  // charge special slightly
-  state.player.specialCharge = Math.min(10, state.player.specialCharge + 1 + (Upgrades.specialCharge||0));
-  state.phase = 'player';
-  phaseLabel.textContent = 'Player';
-  addLog(`Turn ${state.turn} — Your move.`);
-  computeEnemyPreviews();
-  updateUI();
-}
+    if(b.x <0 || b.x>900 || b.y<0 || b.y>800){
+      delete bullets[id];
+      continue;
+    }
 
-/* small wait helper */
-function waitMs(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+    // hit enemy
+    if(b.owner==="player"){
+      for(const eid in enemies){
+        const e = enemies[eid];
+        if(rect(b,e)){
+          e.life -= b.damage;
+          delete bullets[id];
 
-/* ---------------------- Enemy death & rewards ---------------------- */
-function handleEnemyDeath(id){
-  const e = state.enemies[id];
-  if (!e) return;
-  addLog(`${capitalize(e.type)} killed.`);
-  // spawn reward pickup sometimes
-  if (Math.random() < 0.22) {
-    const pid = uid('p');
-    state.pickups[pid] = {id:pid, type: Math.random() < 0.6 ? 'ammo' : 'heal', x:e.x + rand(-18,18), y:e.y + rand(-18,18)};
-  }
-  // splitter spawns two fast enemies
-  if (e.type === 'splitter'){
-    spawnEnemy('fast', e.x + 24, e.y + 12);
-    spawnEnemy('fast', e.x - 24, e.y + 12);
-    addLog('Splitter breaks into skitters!');
-  }
-  // increase counters
-  state.killsThisLevel++;
-  stats.kills++;
-  delete state.enemies[id];
+          if(e.life<=0){
+            dropLoot(e);
+            delete enemies[eid];
 
-  // check level clear
-  if (state.killsThisLevel >= state.enemiesToClear){
-    // clear wave => advance level
-    addLog('Level cleared!');
-    advanceLevel();
-  }
-}
+            // sala limpa?
+            if(Object.keys(enemies).length===0){
+              room.cleared = true;
+            }
+          }
+          break;
+        }
+      }
+    }
 
-/* ---------------------- Utility / UI ---------------------- */
-function updateUI(){
-  turnLabel.textContent = state.turn;
-  phaseLabel.textContent = state.phase;
-  apLabel.innerHTML = `AP: ${state.player ? state.player.ap : 0} • Ammo: ${state.player ? state.player.ammo+'/'+state.player.clip : '—' } • HP: ${state.player ? state.player.hp+'/'+state.player.maxHp : '—'}`;
-  // player stat panel
-  playerStatsEl.innerHTML = `
-    HP: ${state.player.hp} / ${state.player.maxHp} <br>
-    AP: ${state.player.ap} • Move/AP: ${Math.round(state.player.movePerAP)} px • DMG: ${state.player.dmg} <br>
-    SpecialCharge: ${state.player.specialCharge} / 10 (Cost: ${state.player.specialCost})
-  `;
-  // upgrades panel
-  let upHTML = '<b>Upgrades</b><br>';
-  UPGRADE_POOL.forEach(u => upHTML += `${u.name}: Lvl ${Upgrades[u.key]||0}<br>`);
-  upgradesEl.innerHTML = upHTML;
-  // mutations
-  let muHTML = '<b>Mutations</b><br>';
-  for (const k in Mutations) muHTML += `${Mutations[k].name} (L${Mutations[k].level}) — ${Mutations[k].desc}<br>`;
-  if (!Object.keys(Mutations).length) muHTML += 'None<br>';
-  mutationsEl.innerHTML = muHTML;
-}
+    // hit player
+    if(b.owner==="enemy" && rect(b,player)){
+      delete bullets[id];
+      const dmg = Math.max(1,b.damage - player.def);
+      player.hp -= dmg;
 
-/* draw everything */
-function draw(){
-  ctx.clearRect(0,0,W,H);
-  // background
-  ctx.fillStyle = '#08101a';
-  ctx.fillRect(0,0,W,H);
-
-  // grid lightly
-  ctx.strokeStyle = 'rgba(255,255,255,0.02)';
-  for (let x=0;x<W;x+=48){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for (let y=0;y<H;y+=48){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
-
-  // preview zones (telegraphed)
-  for (const z of state.previewZones){
-    ctx.beginPath();
-    ctx.fillStyle = 'rgba(255,80,80,0.12)';
-    ctx.arc(z.x, z.y, z.r, 0, Math.PI*2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,80,80,0.25)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+      if(player.hp<=0){
+        gameOver();
+        return;
+      }
+    }
   }
 
   // pickups
-  for (const pid in state.pickups){
-    const p = state.pickups[pid];
-    ctx.fillStyle = p.type === 'ammo' ? '#ffd166' : '#90ee90';
-    ctx.fillRect(p.x-8, p.y-8, 16, 16);
-  }
+  for(const id in pickups){
+    const p = pickups[id];
+    if(rect(p,player)){
+      if(p.type==="heal") player.hp = Math.min(player.hpMax, player.hp+4);
+      if(p.type==="atk") player.atk++;
+      if(p.type==="def") player.def++;
+      if(p.type==="crit") player.crit += 0.05;
 
-  // enemies
-  for (const id in state.enemies){
-    const e = state.enemies[id];
-    ctx.fillStyle = e.spec.color;
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r, 0, Math.PI*2);
-    ctx.fill();
-    // hp bar
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(e.x - 20, e.y - e.r - 12, 40, 6);
-    ctx.fillStyle = '#ff6b6b';
-    const ratio = clamp(e.hp / (e.spec.life + Math.floor(state.level/3)), 0,1);
-    ctx.fillRect(e.x - 20, e.y - e.r - 12, 40 * ratio, 6);
+      delete pickups[id];
+    }
+  }
+}
+
+/* ===========================================================
+   DRAW
+=========================================================== */
+function draw(){
+  ctx.fillStyle="#222";
+  ctx.fillRect(0,0,900,800);
+
+  // room index
+  ctx.fillStyle="#666";
+  ctx.font="20px Verdana";
+  ctx.fillText("Sala "+room.index, 20,30);
+
+  // door (próxima sala)
+  if(room.cleared){
+    ctx.fillStyle="lightblue";
+    ctx.fillRect(420,10,60,20);
   }
 
   // player
-  if (state.player){
-    ctx.fillStyle = '#8de0a6';
-    ctx.beginPath();
-    ctx.arc(state.player.x, state.player.y, state.player.r, 0, Math.PI*2);
-    ctx.fill();
-    // player hp bar
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(20, H-42, 220, 16);
-    ctx.fillStyle = '#a3e635';
-    const pr = clamp(state.player.hp/state.player.maxHp, 0,1);
-    ctx.fillRect(20, H-42, 220*pr, 16);
+  ctx.fillStyle="lightgreen";
+  ctx.fillRect(player.x-player.w/2, player.y-player.h/2, player.w, player.h);
 
-    // draw AP rings (visual)
-    for (let i=0;i<state.player.ap;i++){
-      ctx.beginPath();
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-      ctx.arc(state.player.x, state.player.y, state.player.r + 6 + i*6, 0, Math.PI*2);
-      ctx.stroke();
+  // enemies
+  for(const id in enemies){
+    const e = enemies[id];
+    ctx.fillStyle=e.color;
+    ctx.fillRect(e.x-e.w/2, e.y-e.h/2, e.w, e.h);
+  }
+
+  // bullets
+  for(const id in bullets){
+    const b = bullets[id];
+    ctx.fillStyle = b.owner==="player"?"white":"red";
+    ctx.fillRect(b.x-b.w/2,b.y-b.h/2,b.w,b.h);
+  }
+
+  // pickups
+  for(const id in pickups){
+    const p = pickups[id];
+    ctx.fillStyle = p.type==="heal"?"lime":
+                    p.type==="atk"?"yellow":
+                    p.type==="def"?"cyan":"violet";
+    ctx.fillRect(p.x-p.w/2,p.y-p.h/2,p.w,p.h);
+  }
+
+  // HUD
+  HUD.innerHTML =
+    `HP: ${player.hp}/${player.hpMax}<br>`+
+    `ATK ${player.atk} • DEF ${player.def} • CRIT ${(player.crit*100).toFixed(0)}%<br>`+
+    (room.cleared?"Porta aberta → Vá ao topo":"");
+}
+
+/* ===========================================================
+   HELPERS
+=========================================================== */
+function rect(a,b){
+  return a.x < b.x + b.w &&
+         a.x + a.w > b.x &&
+         a.y < b.y + b.h &&
+         a.y + a.h > b.y;
+}
+
+function gameOver(){
+  state="death";
+  death.style.display="flex";
+  menu.style.display="none";
+  deathStats.innerHTML = `Você chegou até a sala ${room.index}.`;
+}
+
+/* ===========================================================
+   LOOP
+=========================================================== */
+function loop(ts){
+  const dt = (ts-last)/1000;
+  last = ts;
+
+  if(state==="game"){
+    update(dt);
+    draw();
+
+    // porta: próxima sala
+    if(room.cleared && player.y<30 && player.x>420 && player.x<480){
+      generateRoom();
+      player.x=450; player.y=740;
     }
   }
 
-  // UI overlay text
-  ctx.fillStyle = '#cbd5e1';
-  ctx.font = '12px monospace';
-  ctx.fillText(`Level: ${state.level} • Turn: ${state.turn} • Enemies: ${Object.keys(state.enemies).length}`, 12, 18);
-  ctx.fillText(`Kills this lvl: ${state.killsThisLevel}/${state.enemiesToClear}`, 12, 34);
+  requestAnimationFrame(loop);
 }
 
-/* ---------------------- Input handlers ---------------------- */
-canvas.addEventListener('click', (e) => {
-  if (state.phase !== 'player') return;
+/* ===========================================================
+   INPUT
+=========================================================== */
+document.addEventListener("keydown",e=>{
+  if(state!=="game") return;
+  if(e.key==="w") player.pressing.up=true;
+  if(e.key==="s") player.pressing.down=true;
+  if(e.key==="a") player.pressing.left=true;
+  if(e.key==="d") player.pressing.right=true;
+});
+
+document.addEventListener("keyup",e=>{
+  if(state!=="game") return;
+  if(e.key==="w") player.pressing.up=false;
+  if(e.key==="s") player.pressing.down=false;
+  if(e.key==="a") player.pressing.left=false;
+  if(e.key==="d") player.pressing.right=false;
+});
+
+canvas.addEventListener("mousedown",e=>{
+  if(state!=="game") return;
+  if(player.atkCD>0) return;
+
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
-  // if left click on enemy -> shoot
-  let clickedEnemy = null;
-  for (const id in state.enemies){
-    const en = state.enemies[id];
-    if (Math.hypot(mx - en.x, my - en.y) <= en.r + 4){ clickedEnemy = en; break; }
-  }
-  if (clickedEnemy){ playerShootAt(clickedEnemy.x, clickedEnemy.y); draw(); updateUI(); return; }
-  // else if left click on pickup
-  for (const pid in state.pickups){
-    const p = state.pickups[pid];
-    if (Math.hypot(mx - p.x, my - p.y) <= 14){ // pick it up
-      if (p.type === 'ammo'){ state.player.ammo = Math.min(state.player.clip, state.player.ammo + 3 + Upgrades.clip); addLog('Picked up ammo'); }
-      else { state.player.hp = Math.min(state.player.maxHp, state.player.hp + 4); addLog('Picked up heal'); }
-      delete state.pickups[pid];
-      computeEnemyPreviews();
-      updateUI();
-      return;
-    }
-  }
-  // otherwise move
-  playerMoveTo(mx, my);
-  draw();
-  updateUI();
+
+  const a = Math.atan2(my-player.y, mx-player.x);
+  const isCrit = Math.random()<player.crit;
+  const dmg = isCrit ? player.atk*2 : player.atk;
+
+  spawnBullet(player.x, player.y, a, dmg, "player");
+
+  player.atkCD = 0.25;
 });
 
-canvas.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  if (state.phase !== 'player') return;
-  playerSpecial();
-  draw();
-  updateUI();
-});
+/* ===========================================================
+   START
+=========================================================== */
+startBtn.onclick = ()=>{
+  state="game";
+  menu.style.display="none";
+  death.style.display="none";
 
-document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space'){ // shoot toward mouse
-    if (state.phase !== 'player') return;
-    // shoot at current mouse pos (approx center if unknown)
-    const rect = canvas.getBoundingClientRect();
-    const targetX = lastMouse.x || state.player.x + 200;
-    const targetY = lastMouse.y || state.player.y;
-    playerShootAt(targetX, targetY);
-    draw();
-    updateUI();
-  }
-  if (e.key === 'Tab'){ e.preventDefault(); // toggle details maybe
-    // noop for now — UI is always visible
-  }
-  if (e.key === 'Enter'){ // end turn
-    if (state.phase === 'player') endPlayerTurn();
-  }
-});
+  createPlayer();
+  room = {index:1, cleared:false};
+  generateRoom();
+};
 
-/* track last mouse for Space shooting fallback */
-let lastMouse = { x: null, y: null };
-canvas.addEventListener('mousemove', (e) => {
-  const r = canvas.getBoundingClientRect();
-  lastMouse.x = e.clientX - r.left;
-  lastMouse.y = e.clientY - r.top;
-});
+restartBtn.onclick = startBtn.onclick;
 
-/* ---------------------- Turn control ---------------------- */
-function endPlayerTurn(){
-  // go to enemy phase
-  addLog('You end your turn.');
-  state.phase = 'enemyPreview';
-  updateUI();
-  // small delay then enemy phase
-  setTimeout(() => { enemyPhase(); }, 240);
-}
-
-btnEndTurn.addEventListener('click', () => {
-  if (state.phase === 'player') endPlayerTurn();
-});
-
-btnStart.addEventListener('click', () => {
-  initRun();
-  draw();
-  updateUI();
-});
-
-/* ---------------------- Helpers ---------------------- */
-function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
-function addLog(t){ addLogInner(t); } // wrapper
-
-function addLogInner(t){
-  addLog(t); // push to DOM
-}
-
-/* Simple check if player is in cover (placeholder) */
-function insideCover(x,y){ // for reflect mutation; naive: near left or right walls
-  return x < 90 || x > W - 90;
-}
-
-/* ---------------------- End run & cleanup ---------------------- */
-function endRun(){
-  addLog(`Run ended. Reached level ${state.level}.`);
-  state.phase = 'gameover';
-  updateUI();
-}
-
-/* ---------------------- render loop ---------------------- */
-function loop(){
-  draw();
-  requestAnimationFrame(loop);
-}
 requestAnimationFrame(loop);
-
-/* ---------------------- Bootstrap small helpers ---------------------- */
-function addLog(msg){
-  const d = document.createElement('div');
-  d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  logEl.appendChild(d);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-/* Initialize UI labels */
-phaseLabel.textContent = 'idle';
-turnLabel.textContent = '-';
-apLabel.textContent = '';
-upgradesEl.innerHTML = '';
-mutationsEl.innerHTML = '';
-playerStatsEl.innerHTML = '';
-
-/* Start with a menu state (user presses Start) */
-addLog('Press Start to begin a run.');
-
 </script>
 </body>
 </html>
